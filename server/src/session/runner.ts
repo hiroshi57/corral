@@ -1,33 +1,47 @@
-// 実行抽象：実プロセス起動 or デモ疑似実行
+// 実行抽象：1回のエージェント起動 = 1 Runner。
+//
+// セキュリティ設計:
+//  - ユーザーのプロンプトは argv にもシェル文字列にも載せない。
+//    stdin かファイル経由でのみ渡すため、コマンドインジェクションが構造的に起きない。
+//  - POSIX では shell:false（配列 argv でそのまま実行）。
+//    Windows は .cmd 実行のため shell を使うが、argv にユーザー文字列が無いので安全。
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from '../config.js';
-import { getProfile } from '../agents/registry.js';
+import { getProfile, type RunSpec } from '../agents/registry.js';
 import type { AgentKind } from '../types.js';
 
-export interface RunnerEvents {
-  output: (stream: 'stdout' | 'stderr', text: string) => void;
-  exit: (code: number | null) => void;
-}
-
 export interface Runner {
-  on<K extends keyof RunnerEvents>(event: K, listener: RunnerEvents[K]): void;
-  /** 追加指示を標準入力へ送る（broadcast / 差し戻し） */
-  send(text: string): void;
+  on(event: 'output', listener: (stream: 'stdout' | 'stderr', text: string) => void): void;
+  on(event: 'exit', listener: (code: number | null) => void): void;
   stop(): void;
 }
 
-/** 実エージェント CLI を子プロセスで起動 */
+const isWin = process.platform === 'win32';
+
+/** 実エージェント CLI を子プロセスで1回起動 */
 export class ProcessRunner extends EventEmitter implements Runner {
   private child: ChildProcess;
 
-  constructor(agent: AgentKind, prompt: string, autoAccept: boolean, cwd: string) {
+  constructor(spec: RunSpec, prompt: string, cwd: string) {
     super();
-    const profile = getProfile(agent);
-    const args = profile.buildArgs(prompt, autoAccept);
-    this.child = spawn(profile.command, args, {
+    const args = [...spec.args];
+
+    // deliver=file: プロンプトを worktree 内のファイルへ書き、そのパスだけを argv に足す
+    if (spec.deliver === 'file' && spec.fileFlag) {
+      const promptDir = path.join(cwd, '.corral');
+      fs.mkdirSync(promptDir, { recursive: true });
+      const promptPath = path.join(promptDir, `prompt-${Date.now()}.txt`);
+      fs.writeFileSync(promptPath, prompt, 'utf8');
+      args.push(promptPath); // fileFlag は spec.args 末尾に含めてある
+    }
+
+    this.child = spawn(spec.command, args, {
       cwd,
-      shell: process.platform === 'win32', // Windows で .cmd 解決のため
+      // Windows のみ shell（.cmd 解決）。argv にユーザー文字列が無いため注入は起きない
+      shell: isWin,
       env: process.env,
     });
 
@@ -38,10 +52,12 @@ export class ProcessRunner extends EventEmitter implements Runner {
       this.emit('exit', 1);
     });
     this.child.on('exit', (code) => this.emit('exit', code));
-  }
 
-  send(text: string): void {
-    this.child.stdin?.write(text.endsWith('\n') ? text : text + '\n');
+    // deliver=stdin: プロンプトを標準入力へ流して閉じる（会話の1メッセージ）
+    if (spec.deliver === 'stdin' && this.child.stdin) {
+      this.child.stdin.write(prompt.endsWith('\n') ? prompt : prompt + '\n');
+      this.child.stdin.end();
+    }
   }
 
   stop(): void {
@@ -49,33 +65,43 @@ export class ProcessRunner extends EventEmitter implements Runner {
   }
 }
 
-/** デモ用：エージェントが無くても動く疑似実行 */
+/** デモ用：worktree に実ファイルを書き、diff/変更数/commit が実体を持つ */
 export class DemoRunner extends EventEmitter implements Runner {
   private timers: NodeJS.Timeout[] = [];
   private stopped = false;
 
-  constructor(agent: AgentKind, prompt: string) {
+  constructor(agent: AgentKind, prompt: string, isFollowup: boolean, cwd: string) {
     super();
-    const profile = getProfile(agent);
-    const steps = [
-      `${profile.label} を worktree で起動しました。`,
-      `タスクを解析中: 「${prompt}」`,
-      'ファイルを走査しています...',
-      '3 ファイルの変更案を生成しました。',
-      '変更を適用しました。人間のレビューを待ちます。',
+    const label = getProfile(agent).label;
+    const steps: Array<() => void> = [
+      () => this.log(`${label} を worktree で起動しました。`),
+      () => this.log(`${isFollowup ? '継続タスク' : 'タスク'}を解析中: 「${prompt}」`),
+      () => {
+        // 実ファイルを書き出す（差分が実体を持つ）
+        try {
+          fs.mkdirSync(cwd, { recursive: true });
+          const n = fs.readdirSync(cwd).filter((f) => f.startsWith('demo_change_')).length + 1;
+          const file = path.join(cwd, `demo_change_${n}.txt`);
+          fs.writeFileSync(file, `# 変更 ${n}\n指示: ${prompt}\n生成時刻: ${new Date().toISOString()}\n`);
+          this.log(`ファイル demo_change_${n}.txt を生成しました。`);
+        } catch (e) {
+          this.log(`ファイル生成に失敗: ${(e as Error).message}`);
+        }
+      },
+      () => this.log('変更を適用しました。人間のレビューを待ちます。'),
     ];
-    steps.forEach((line, i) => {
+    steps.forEach((fn, i) => {
       const t = setTimeout(() => {
         if (this.stopped) return;
-        this.emit('output', 'stdout', line + '\n');
+        fn();
         if (i === steps.length - 1) this.emit('exit', 0);
-      }, 700 * (i + 1));
+      }, 600 * (i + 1));
       this.timers.push(t);
     });
   }
 
-  send(text: string): void {
-    this.emit('output', 'stdout', `[追加指示を受信] ${text}\n`);
+  private log(text: string): void {
+    this.emit('output', 'stdout', text + '\n');
   }
 
   stop(): void {
@@ -85,13 +111,16 @@ export class DemoRunner extends EventEmitter implements Runner {
   }
 }
 
+/** 1回の run を作る。isFollowup=true なら継続run（--continue / exec resume 等） */
 export function createRunner(
   agent: AgentKind,
   prompt: string,
   autoAccept: boolean,
-  cwd: string
+  cwd: string,
+  isFollowup: boolean
 ): Runner {
-  return config.demo
-    ? new DemoRunner(agent, prompt)
-    : new ProcessRunner(agent, prompt, autoAccept, cwd);
+  if (config.demo) return new DemoRunner(agent, prompt, isFollowup, cwd);
+  const profile = getProfile(agent);
+  const spec = isFollowup ? profile.buildFollowup(autoAccept) : profile.buildInitial(autoAccept);
+  return new ProcessRunner(spec, prompt, cwd);
 }

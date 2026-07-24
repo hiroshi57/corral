@@ -38,6 +38,13 @@ export interface Session {
   exitCode: number | null;
   /** 変更ファイル数（diff の概要） */
   changedFiles: number;
+  /**
+   * 指示の履歴（1件目=初回タスク、以降=追加指示）。
+   * 追加指示は stdin 注入ではなく「継続run」で反映するため、文脈保持に使う。
+   */
+  turns: string[];
+  /** 実行中に届いた追加指示。現ランの終了後に継続runとして流す */
+  pendingFollowups: string[];
   /** 直近ログ（リングバッファ） */
   logs: LogLine[];
 }

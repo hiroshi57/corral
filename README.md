@@ -15,7 +15,7 @@
 | 🎯 司令塔ペイン | 1画面から指示出し。結果を待つだけ | onorca / herdr |
 | 🌳 worktree 隔離 | 各エージェントが専用の git worktree・ブランチで並列実行。衝突なし | 全ツール共通 |
 | 🔢 台数指定の一括起動 | `Claude ×3` のようにまとめて起動 | uzi |
-| 📣 broadcast | 全ワーカーへ一斉指示 | uzi |
+| 📣 broadcast | 全ワーカーへ一斉指示（継続runとして反映。実行中の分は完了後に順次消化） | uzi |
 | 👀 状態の一覧可視化 | 実行中 / 要確認 / 完了 / エラーを一目で | herdr |
 | 📝 差分レビュー → 承認 | diff を確認して commit（checkpoint） | Claude Squad / Vibe Kanban |
 | 🤖 自動承認(yolo) | 確認を自動で通しバックグラウンド完了 | Claude Squad / uzi |
@@ -57,7 +57,19 @@ npm run web
 | `CORRAL_DEMO` | `1` | `0` で実エージェント起動モード |
 | `CORRAL_REPO` | カレント | 対象リポジトリのルート |
 | `CORRAL_WORKTREE_BASE` | `.corral/worktrees` | worktree 作成先 |
-| `CORRAL_CUSTOM_CMD` | `echo` | `custom` エージェントのコマンド |
+| `CORRAL_TOKEN` | 自動生成 | API トークン。未指定なら起動時に生成し `.corral/token` へ書き出す |
+| `CORRAL_CUSTOM_CMD` | `cat` | `custom` エージェントのコマンド |
+
+### セキュリティ
+
+ローカル専用ツールですが、無防備にはしていません。
+
+- **Host ヘッダ検証**（loopback のみ）で **DNS リバインディング**を遮断
+- **トークンヘッダ**（`x-corral-token`）で health 以外の API を保護（CSRF/他プロセス対策）
+- **CORS** はダッシュボードのオリジンのみ許可、**WebSocket** も Origin/Host を検証
+- **プロンプトは argv/シェルに載せず** stdin・ファイル経由でのみ渡すため、`$(...)` 等の
+  シェルインジェクションは構造的に起きない
+- トークンは Vite プロキシ（開発）／HTML注入（本番）でダッシュボードへ安全に受け渡し
 
 ---
 
@@ -78,9 +90,9 @@ corral/
 
 1. **司令塔** にタスクを書いてエージェントと台数を選び「▶ 起動」
 2. 各ワーカーが worktree で並列実行 → カードの状態が **実行中 → 要確認** に変化
-3. 追加の共通指示は **📣 broadcast** で全員へ一斉送信
+3. 追加の共通指示は **📣 broadcast** で全員へ一斉送信（各ワーカーの会話を継続する形で反映。実行中なら完了後に順次適用）
 4. カードをクリックして **端末出力** と **差分** を確認
-5. 問題なければ **✓ 承認して commit**、直したければ追加指示で差し戻し
+5. 問題なければ **✓ 承認して commit**、直したければ追加指示で差し戻し（`--continue` / `exec resume` で文脈を保持したまま継続）
 
 ---
 

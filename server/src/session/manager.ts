@@ -10,6 +10,7 @@ import {
   checkpoint,
 } from '../git/worktree.js';
 import { createRunner, type Runner } from './runner.js';
+import { getProfile } from '../agents/registry.js';
 import type {
   AgentKind,
   CreateSessionInput,
@@ -54,8 +55,7 @@ export class SessionManager extends EventEmitter {
     const now = Date.now();
     const label = AGENT_LABEL[input.agent] ?? input.agent;
     const title =
-      input.title?.trim() ||
-      `${label}${index ? ` #${index}` : ''}: ${input.prompt.slice(0, 24)}`;
+      input.title?.trim() || `${label}${index ? ` #${index}` : ''}: ${input.prompt.slice(0, 24)}`;
 
     const session: Session = {
       id,
@@ -70,18 +70,19 @@ export class SessionManager extends EventEmitter {
       updatedAt: now,
       exitCode: null,
       changedFiles: 0,
+      turns: [input.prompt],
+      pendingFollowups: [],
       logs: [],
     };
     this.sessions.set(id, session);
     this.emitUpdate(session);
 
-    // worktree 作成 → 実行開始
     try {
       const { worktreePath, branch } = await createWorktree(id);
       session.worktreePath = worktreePath;
       session.branch = branch;
       this.appendLog(session, 'system', `worktree を作成: ${branch}`);
-      this.startRunner(session);
+      this.startRun(session, session.prompt, false);
     } catch (err) {
       this.appendLog(session, 'system', `worktree 作成に失敗: ${(err as Error).message}`);
       this.setStatus(session, 'error');
@@ -89,33 +90,47 @@ export class SessionManager extends EventEmitter {
     return toSummary(session);
   }
 
-  private startRunner(session: Session): void {
+  /**
+   * 1回の run を開始する。
+   * @param text この run に渡すプロンプト（初回=タスク、継続=追加指示 or 文脈結合文）
+   * @param isFollowup 継続run か
+   */
+  private startRun(session: Session, text: string, isFollowup: boolean): void {
     this.setStatus(session, 'running');
     const runner = createRunner(
       session.agent,
-      session.prompt,
+      text,
       session.autoAccept,
-      session.worktreePath!
+      session.worktreePath!,
+      isFollowup
     );
     this.runners.set(session.id, runner);
 
-    runner.on('output', (stream, text) => {
-      for (const line of text.split(/\r?\n/)) {
+    runner.on('output', (stream, chunk) => {
+      for (const line of chunk.split(/\r?\n/)) {
         if (line.length > 0) this.appendLog(session, stream, line);
       }
     });
 
     runner.on('exit', async (code) => {
+      this.runners.delete(session.id);
       session.exitCode = code;
       session.changedFiles = await countChanges(session.worktreePath!);
-      this.runners.delete(session.id);
+
+      // 実行中に届いた追加指示があれば、まず継続runとして消化する
+      if (code !== null && session.pendingFollowups.length > 0) {
+        const next = session.pendingFollowups.shift()!;
+        this.appendLog(session, 'system', `継続: ${next}`);
+        this.startRun(session, this.followupText(session, next), true);
+        return;
+      }
+
       if (code === null) {
         this.setStatus(session, 'stopped');
       } else if (code !== 0) {
         this.appendLog(session, 'system', `異常終了（code=${code}）`);
         this.setStatus(session, 'error');
       } else if (session.autoAccept) {
-        // 自動承認：そのまま checkpoint
         await this.approve(session.id, `corral: ${session.title}`);
       } else {
         this.setStatus(session, 'needs_review');
@@ -123,19 +138,36 @@ export class SessionManager extends EventEmitter {
     });
   }
 
-  /** 追加指示（個別 / broadcast から呼ばれる） */
+  /**
+   * 継続runへ渡す文言を作る。
+   * ネイティブに会話継続できるエージェント（claude/codex）は追加指示だけを渡す。
+   * できないエージェントは、過去の指示を文脈として結合して渡す（文脈欠落を防ぐ）。
+   */
+  private followupText(session: Session, instruction: string): string {
+    if (getProfile(session.agent).nativeResume) return instruction;
+    const history = session.turns.slice(0, -1); // 末尾=今回の指示
+    const past = history.map((t, i) => `${i + 1}. ${t}`).join('\n');
+    return `これまでの指示:\n${past}\n\n最新の追加指示:\n${instruction}\n\n上記の文脈を踏まえて作業を継続してください。`;
+  }
+
+  /**
+   * 追加指示。実行中ならキューに積み、現ランの終了後に継続runとして流す。
+   * 停止/完了済みなら即座に継続runを開始する。
+   * ※ stdin 注入はしない（ワンショットCLIでは無効なため）。
+   */
   instruct(id: string, text: string): boolean {
     const session = this.sessions.get(id);
-    const runner = this.runners.get(id);
     if (!session) return false;
-    this.appendLog(session, 'system', `指示: ${text}`);
-    if (runner) {
-      runner.send(text);
+    session.turns.push(text);
+
+    if (this.runners.has(id)) {
+      session.pendingFollowups.push(text);
+      this.appendLog(session, 'system', `指示を受付（実行中のため完了後に継続）: ${text}`);
+      this.emitUpdate(session);
       return true;
     }
-    // 停止済みなら再実行（差し戻し）
-    session.prompt = text;
-    this.startRunner(session);
+    this.appendLog(session, 'system', `指示: ${text}`);
+    this.startRun(session, this.followupText(session, text), true);
     return true;
   }
 
@@ -151,11 +183,13 @@ export class SessionManager extends EventEmitter {
   async approve(id: string, message: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session?.worktreePath) return false;
-    const { committed } = await checkpoint(session.worktreePath, message);
+    const { committed, count } = await checkpoint(session.worktreePath, message);
     this.appendLog(
       session,
       'system',
-      committed ? `承認：変更を commit しました` : `承認：commit 対象の変更はありませんでした`
+      committed
+        ? `承認：${count} 件の変更を記録（commit）しました`
+        : `承認：記録対象の変更はありませんでした`
     );
     this.setStatus(session, 'done');
     return true;
@@ -173,7 +207,6 @@ export class SessionManager extends EventEmitter {
     return !!runner;
   }
 
-  /** 破棄：worktree ごと削除 */
   async remove(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) return false;
