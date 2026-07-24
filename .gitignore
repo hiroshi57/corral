@@ -11,3 +11,6 @@ server/dist/
 .corral/
 data/*.json
 !data/.gitkeep
+
+.vercel/
+.env*.local
