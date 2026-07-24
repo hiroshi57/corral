@@ -1,0 +1,24 @@
+{
+  "name": "corral",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code / Codex の複数エージェントを一つの司令塔から統率するマルチペイン・オーケストレーター",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w server && npm run build -w web",
+    "start": "npm run start -w server",
+    "server": "npm run dev -w server",
+    "web": "npm run dev -w web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

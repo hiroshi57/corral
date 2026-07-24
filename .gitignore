@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+.next/
+*.log
+.env
+.env.local
+.DS_Store
+web/dist/
+server/dist/
+.corral/
+data/*.json
+!data/.gitkeep
