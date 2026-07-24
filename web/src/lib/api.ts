@@ -1,5 +1,6 @@
-// REST API クライアント
+// REST API クライアント（デモモード時はブラウザ内バックエンドへ委譲）
 import type { AgentKind, LogLine, SessionSummary } from './types';
+import { demoBackend, IS_DEMO } from './demo';
 
 const BASE = '/api';
 
@@ -17,12 +18,18 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => req<{ ok: boolean; demo: boolean; repoRoot: string }>('/health'),
+  health: () =>
+    IS_DEMO
+      ? Promise.resolve({ ok: true, demo: true, repoRoot: '(browser demo)' })
+      : req<{ ok: boolean; demo: boolean; repoRoot: string }>('/health'),
 
-  listSessions: () => req<SessionSummary[]>('/sessions'),
+  listSessions: () =>
+    IS_DEMO ? Promise.resolve(demoBackend.list()) : req<SessionSummary[]>('/sessions'),
 
   getSession: (id: string) =>
-    req<SessionSummary & { logs: LogLine[] }>(`/sessions/${id}`),
+    IS_DEMO
+      ? Promise.resolve(demoBackend.getSession(id) as SessionSummary & { logs: LogLine[] })
+      : req<SessionSummary & { logs: LogLine[] }>(`/sessions/${id}`),
 
   createSessions: (input: {
     agent: AgentKind;
@@ -31,32 +38,43 @@ export const api = {
     autoAccept?: boolean;
     title?: string;
   }) =>
-    req<SessionSummary[]>('/sessions', {
-      method: 'POST',
-      body: JSON.stringify(input),
-    }),
+    IS_DEMO
+      ? Promise.resolve(demoBackend.createSessions(input))
+      : req<SessionSummary[]>('/sessions', {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
 
   instruct: (id: string, text: string) =>
-    req<{ ok: boolean }>(`/sessions/${id}/instruct`, {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    }),
+    IS_DEMO
+      ? Promise.resolve(demoBackend.instruct(id, text))
+      : req<{ ok: boolean }>(`/sessions/${id}/instruct`, {
+          method: 'POST',
+          body: JSON.stringify({ text }),
+        }),
 
   broadcast: (text: string, targetIds?: string[]) =>
-    req<{ delivered: number }>('/broadcast', {
-      method: 'POST',
-      body: JSON.stringify({ text, targetIds }),
-    }),
+    IS_DEMO
+      ? Promise.resolve(demoBackend.broadcast(text, targetIds))
+      : req<{ delivered: number }>('/broadcast', {
+          method: 'POST',
+          body: JSON.stringify({ text, targetIds }),
+        }),
 
-  diff: (id: string) => req<{ diff: string }>(`/sessions/${id}/diff`),
+  diff: (id: string) =>
+    IS_DEMO ? Promise.resolve(demoBackend.diff(id)) : req<{ diff: string }>(`/sessions/${id}/diff`),
 
   approve: (id: string, message?: string) =>
-    req<{ ok: boolean }>(`/sessions/${id}/approve`, {
-      method: 'POST',
-      body: JSON.stringify({ message }),
-    }),
+    IS_DEMO
+      ? Promise.resolve(demoBackend.approve(id))
+      : req<{ ok: boolean }>(`/sessions/${id}/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ message }),
+        }),
 
-  stop: (id: string) => req<{ ok: boolean }>(`/sessions/${id}/stop`, { method: 'POST' }),
+  stop: (id: string) =>
+    IS_DEMO ? Promise.resolve(demoBackend.stop(id)) : req<{ ok: boolean }>(`/sessions/${id}/stop`, { method: 'POST' }),
 
-  remove: (id: string) => req<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
+  remove: (id: string) =>
+    IS_DEMO ? Promise.resolve(demoBackend.remove(id)) : req<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
 };

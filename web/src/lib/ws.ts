@@ -1,7 +1,13 @@
-// WebSocket 接続（自動再接続つき）
+// WebSocket 接続（自動再接続つき）。デモモード時はブラウザ内バックエンドを購読する。
 import type { ServerEvent } from './types';
+import { demoBackend, IS_DEMO } from './demo';
 
 export function connectWs(onEvent: (e: ServerEvent) => void): () => void {
+  // デモモード：WebSocket の代わりにブラウザ内バックエンドのイベントを購読
+  if (IS_DEMO) {
+    return demoBackend.subscribe(onEvent);
+  }
+
   let ws: WebSocket | null = null;
   let closed = false;
   let retry: ReturnType<typeof setTimeout> | null = null;
