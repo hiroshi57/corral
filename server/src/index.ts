@@ -7,6 +7,8 @@ import cors from 'cors';
 import { config } from './config.js';
 import { SessionManager } from './session/manager.js';
 import { createRouter } from './api/routes.js';
+import { createAuthRouter } from './api/auth.js';
+import { resolveIdentity } from './auth/middleware.js';
 import { attachWebSocket } from './ws/hub.js';
 
 // --- トークンを共有ファイルへ書き出す（Vite プロキシが読んでヘッダに付与） ---
@@ -39,24 +41,17 @@ app.use(
       if (!origin) return cb(null, true); // 同一オリジン/非ブラウザ
       cb(null, config.allowedOrigins.includes(origin));
     },
-    allowedHeaders: ['Content-Type', 'x-corral-token'],
+    allowedHeaders: ['Content-Type', 'x-corral-token', 'x-corral-session', 'x-corral-workspace'],
   })
 );
 
 app.use(express.json({ limit: '2mb' }));
 
-// (3) トークン検証：health 以外の /api を保護。
-function requireToken(req: Request, res: Response, next: NextFunction) {
-  if (req.method === 'OPTIONS') return next();
-  if (req.path === '/health') return next();
-  if (req.header('x-corral-token') !== config.token) {
-    return res.status(401).json({ error: '認証トークンが不正です' });
-  }
-  next();
-}
-
 const sessions = new SessionManager();
-app.use('/api', requireToken, createRouter(sessions));
+// ⑤ 認証ルート（token or セッション発行）。identity 解決の前に公開
+app.use('/api/auth', createAuthRouter());
+// (3) 認証：health/auth 以外は x-corral-token（オーナー）or セッションを要求
+app.use('/api', resolveIdentity, createRouter(sessions));
 
 // (4) 本番：ビルド済み Web を同一オリジンで配信し、token を HTML に注入
 const webDist = path.join(config.corralRoot, 'web', 'dist');

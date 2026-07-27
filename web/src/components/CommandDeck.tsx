@@ -6,7 +6,15 @@ import { api } from '../lib/api';
 
 const AGENTS: AgentKind[] = ['claude', 'codex', 'gemini', 'aider'];
 
-export function CommandDeck({ onChanged }: { onChanged: () => void }) {
+export function CommandDeck({
+  onChanged,
+  canCreate = true,
+  canInstruct = true,
+}: {
+  onChanged: () => void;
+  canCreate?: boolean;
+  canInstruct?: boolean;
+}) {
   const [agent, setAgent] = useState<AgentKind>('claude');
   const [prompt, setPrompt] = useState('');
   const [count, setCount] = useState(1);
@@ -100,7 +108,8 @@ export function CommandDeck({ onChanged }: { onChanged: () => void }) {
           </label>
           <button
             onClick={dispatch}
-            disabled={busy || !prompt.trim()}
+            disabled={busy || !prompt.trim() || !canCreate}
+            title={canCreate ? '' : '起動権限がありません（閲覧者）'}
             className="ml-auto bg-accent text-black font-bold rounded-lg px-4 py-1.5 text-sm disabled:opacity-40"
           >
             ▶ 起動
@@ -123,7 +132,8 @@ export function CommandDeck({ onChanged }: { onChanged: () => void }) {
           />
           <button
             onClick={doBroadcast}
-            disabled={busy || !broadcastText.trim()}
+            disabled={busy || !broadcastText.trim() || !canInstruct}
+            title={canInstruct ? '' : '指示権限がありません（閲覧者）'}
             className="bg-panel border border-edge rounded-lg px-3 py-1.5 text-sm disabled:opacity-40 hover:border-accent"
           >
             📣 送信

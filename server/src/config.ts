@@ -51,6 +51,20 @@ export const config = {
     events: (process.env.CORRAL_NOTIFY_EVENTS ?? 'needs_review,done,error').split(','),
   },
 
+  // --- ⑤ 認証 / SSO ---
+  auth: {
+    /** dev ログイン（メール入力でログイン）を許可するか。既定 ON（ローカル/デモ用） */
+    devLogin: process.env.CORRAL_DEV_LOGIN !== '0',
+    /** セッション有効期間(ms) 既定12h */
+    sessionTtlMs: Number(process.env.CORRAL_SESSION_TTL_MS ?? 12 * 3600 * 1000),
+    /** Google OIDC（設定時のみ有効） */
+    google: {
+      clientId: process.env.CORRAL_GOOGLE_CLIENT_ID ?? '',
+      clientSecret: process.env.CORRAL_GOOGLE_CLIENT_SECRET ?? '',
+      redirectUri: process.env.CORRAL_GOOGLE_REDIRECT ?? '',
+    },
+  },
+
   // --- ② FinOps（コスト計測） ---
   finops: {
     /** 予算（USD, 累計）。0 = 無制限 */

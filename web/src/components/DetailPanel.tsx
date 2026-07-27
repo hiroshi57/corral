@@ -14,10 +14,14 @@ export function DetailPanel({
   session,
   logs,
   onChanged,
+  canInstruct = true,
+  canApprove = true,
 }: {
   session: SessionSummary | null;
   logs: LogLine[];
   onChanged: () => void;
+  canInstruct?: boolean;
+  canApprove?: boolean;
 }) {
   const [tab, setTab] = useState<'log' | 'diff'>('log');
   const [diff, setDiff] = useState('');
@@ -106,13 +110,15 @@ export function DetailPanel({
           <input
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && sendInstruction()}
-            placeholder="このワーカーへ追加指示 / 差し戻し"
-            className="flex-1 bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent"
+            onKeyDown={(e) => e.key === 'Enter' && canInstruct && sendInstruction()}
+            disabled={!canInstruct}
+            placeholder={canInstruct ? 'このワーカーへ追加指示 / 差し戻し' : '指示権限がありません（閲覧者）'}
+            className="flex-1 bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent disabled:opacity-50"
           />
           <button
             onClick={sendInstruction}
-            className="bg-panel border border-edge rounded-lg px-3 text-sm hover:border-accent"
+            disabled={!canInstruct}
+            className="bg-panel border border-edge rounded-lg px-3 text-sm hover:border-accent disabled:opacity-40"
           >
             送信
           </button>
@@ -120,7 +126,8 @@ export function DetailPanel({
         <div className="flex gap-2">
           <button
             onClick={approve}
-            disabled={session.status === 'done'}
+            disabled={session.status === 'done' || !canApprove}
+            title={canApprove ? '' : '承認権限がありません'}
             className="bg-emerald-500/90 text-black font-bold rounded-lg px-3 py-1.5 text-sm disabled:opacity-40"
           >
             ✓ 承認してcommit

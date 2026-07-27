@@ -38,16 +38,24 @@ export class SessionManager extends EventEmitter {
   /** run 中の出力文字数（本番のトークン概算用） */
   private runOutChars = new Map<string, number>();
 
-  list(): SessionSummary[] {
-    return [...this.sessions.values()].map(toSummary);
+  /** ④ ワークスペース(案件)で絞り込み。未指定なら全件 */
+  list(workspaceId?: string): SessionSummary[] {
+    return [...this.sessions.values()]
+      .filter((s) => !workspaceId || s.workspaceId === workspaceId)
+      .map(toSummary);
   }
 
   get(id: string): Session | undefined {
     return this.sessions.get(id);
   }
 
+  /** セッションが指定ワークスペースに属するか */
+  belongsTo(id: string, workspaceId: string): boolean {
+    return this.sessions.get(id)?.workspaceId === workspaceId;
+  }
+
   /** 台数指定で複数セッションを一括作成（uzi の --agents claude:3 相当） */
-  async createBatch(input: CreateSessionInput): Promise<SessionSummary[]> {
+  async createBatch(input: CreateSessionInput, workspaceId: string): Promise<SessionSummary[]> {
     // ② 予算ハードキャップ到達時は新規起動を止める
     if (this.budgetBlocked()) {
       this.checkBudget();
@@ -56,12 +64,16 @@ export class SessionManager extends EventEmitter {
     const count = Math.max(1, Math.min(input.count ?? 1, 10));
     const created: SessionSummary[] = [];
     for (let i = 0; i < count; i++) {
-      created.push(await this.createOne(input, count > 1 ? i + 1 : undefined));
+      created.push(await this.createOne(input, workspaceId, count > 1 ? i + 1 : undefined));
     }
     return created;
   }
 
-  private async createOne(input: CreateSessionInput, index?: number): Promise<SessionSummary> {
+  private async createOne(
+    input: CreateSessionInput,
+    workspaceId: string,
+    index?: number
+  ): Promise<SessionSummary> {
     const id = nanoid(8);
     const now = Date.now();
     const label = AGENT_LABEL[input.agent] ?? input.agent;
@@ -74,6 +86,7 @@ export class SessionManager extends EventEmitter {
       agent: input.agent,
       prompt: input.prompt,
       status: 'queued',
+      workspaceId,
       worktreePath: null,
       branch: null,
       autoAccept: input.autoAccept ?? false,
@@ -247,9 +260,11 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
-  /** ② FinOps サマリ（API 用） */
-  finopsSummary() {
-    const sessions = [...this.sessions.values()];
+  /** ② FinOps サマリ（API 用）。④ ワークスペースで絞り込み可 */
+  finopsSummary(workspaceId?: string) {
+    const sessions = [...this.sessions.values()].filter(
+      (s) => !workspaceId || s.workspaceId === workspaceId
+    );
     const total = sessions.reduce((a, s) => a + s.usage.costUsd, 0);
     const byAgent: Record<string, { costUsd: number; inputTokens: number; outputTokens: number; sessions: number }> = {};
     for (const s of sessions) {

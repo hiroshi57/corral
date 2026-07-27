@@ -13,6 +13,7 @@ import type {
   SessionSummary,
   Usage,
 } from './types';
+import type { Role, User, WorkspaceInfo } from './auth';
 
 interface DemoSession extends SessionSummary {
   turns: string[];
@@ -48,6 +49,40 @@ class DemoBackend {
   private sessions = new Map<string, DemoSession>();
   private subs = new Set<(e: ServerEvent) => void>();
 
+  // ④ ワークスペース（案件）
+  private workspaces: Array<{ id: string; name: string; createdAt: number; ownerId: string }> = [
+    { id: 'default', name: 'サンプル案件', createdAt: Date.now(), ownerId: 'demo' },
+  ];
+  // ⑤ デモユーザー＆ロール（UI でロール切替して RBAC を体験できる）
+  private user: User = { id: 'demo', email: 'demo@corral', name: 'デモユーザー', provider: 'demo' };
+  private role: Role = 'owner';
+
+  getRole(): Role {
+    return this.role;
+  }
+  setRole(r: Role): void {
+    this.role = r;
+  }
+
+  loginDev(email: string, name?: string): { token: string; user: User } {
+    this.user = { id: 'demo', email, name: name || email.split('@')[0], provider: 'demo' };
+    return { token: 'demo-session', user: this.user };
+  }
+
+  me(): { user: User; workspaces: WorkspaceInfo[] } {
+    return { user: this.user, workspaces: this.listWorkspaces() };
+  }
+
+  listWorkspaces(): WorkspaceInfo[] {
+    return this.workspaces.map((w) => ({ ...w, role: this.role }));
+  }
+
+  createWorkspace(name: string): WorkspaceInfo {
+    const ws = { id: id8(), name, createdAt: Date.now(), ownerId: this.user.id };
+    this.workspaces.push(ws);
+    return { ...ws, role: 'owner' };
+  }
+
   subscribe(fn: (e: ServerEvent) => void): () => void {
     this.subs.add(fn);
     fn({ type: 'snapshot', sessions: this.list() });
@@ -58,8 +93,10 @@ class DemoBackend {
     for (const fn of this.subs) fn(e);
   }
 
-  list(): SessionSummary[] {
-    return [...this.sessions.values()].map(toSummary);
+  list(workspaceId?: string): SessionSummary[] {
+    return [...this.sessions.values()]
+      .filter((s) => !workspaceId || s.workspaceId === workspaceId)
+      .map(toSummary);
   }
 
   getSession(id: string) {
@@ -67,13 +104,16 @@ class DemoBackend {
     return s ? { ...toSummary(s), logs: s.logs } : null;
   }
 
-  createSessions(input: {
-    agent: AgentKind;
-    prompt: string;
-    count?: number;
-    autoAccept?: boolean;
-    title?: string;
-  }): SessionSummary[] {
+  createSessions(
+    input: {
+      agent: AgentKind;
+      prompt: string;
+      count?: number;
+      autoAccept?: boolean;
+      title?: string;
+    },
+    workspaceId = 'default'
+  ): SessionSummary[] {
     const count = Math.max(1, Math.min(input.count ?? 1, 10));
     const created: SessionSummary[] = [];
     for (let i = 0; i < count; i++) {
@@ -88,6 +128,7 @@ class DemoBackend {
         agent: input.agent,
         prompt: input.prompt,
         status: 'queued',
+        workspaceId,
         worktreePath: `/(demo)/.corral/worktrees/${id}`,
         branch: `corral/${id}`,
         autoAccept: input.autoAccept ?? false,
@@ -249,9 +290,11 @@ class DemoBackend {
     }
   }
 
-  /** ② FinOps サマリ */
-  finops(): FinopsSummary {
-    const sessions = [...this.sessions.values()];
+  /** ② FinOps サマリ（④ 案件スコープ） */
+  finops(workspaceId?: string): FinopsSummary {
+    const sessions = [...this.sessions.values()].filter(
+      (s) => !workspaceId || s.workspaceId === workspaceId
+    );
     const totalUsd = sessions.reduce((a, s) => a + s.usage.costUsd, 0);
     const byAgent: FinopsSummary['byAgent'] = {};
     for (const s of sessions) {

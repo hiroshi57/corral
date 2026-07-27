@@ -1,6 +1,7 @@
 // REST API クライアント（デモモード時はブラウザ内バックエンドへ委譲）
 import type { AgentKind, FinopsSummary, LogLine, NotifyEvent, SessionSummary } from './types';
 import { demoBackend, IS_DEMO } from './demo';
+import { store, type User, type WorkspaceInfo } from './auth';
 
 const BASE = '/api';
 
@@ -12,6 +13,9 @@ const TOKEN: string | undefined = (window as unknown as { __CORRAL_TOKEN__?: str
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (TOKEN) headers['x-corral-token'] = TOKEN;
+  const sess = store.getSession();
+  if (sess) headers['x-corral-session'] = sess;
+  headers['x-corral-workspace'] = store.getWorkspace();
   const res = await fetch(BASE + path, { headers, ...init });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json() as Promise<T>;
@@ -36,7 +40,9 @@ export const api = {
         }>('/health'),
 
   listSessions: () =>
-    IS_DEMO ? Promise.resolve(demoBackend.list()) : req<SessionSummary[]>('/sessions'),
+    IS_DEMO
+      ? Promise.resolve(demoBackend.list(store.getWorkspace()))
+      : req<SessionSummary[]>('/sessions'),
 
   getSession: (id: string) =>
     IS_DEMO
@@ -51,7 +57,7 @@ export const api = {
     title?: string;
   }) =>
     IS_DEMO
-      ? Promise.resolve(demoBackend.createSessions(input))
+      ? Promise.resolve(demoBackend.createSessions(input, store.getWorkspace()))
       : req<SessionSummary[]>('/sessions', {
           method: 'POST',
           body: JSON.stringify(input),
@@ -91,7 +97,7 @@ export const api = {
     IS_DEMO ? Promise.resolve(demoBackend.remove(id)) : req<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
 
   finops: () =>
-    IS_DEMO ? Promise.resolve(demoBackend.finops()) : req<FinopsSummary>('/finops'),
+    IS_DEMO ? Promise.resolve(demoBackend.finops(store.getWorkspace())) : req<FinopsSummary>('/finops'),
 
   notifyTest: () =>
     IS_DEMO
@@ -104,4 +110,34 @@ export const api = {
           message: '✅ 通知テスト',
         })
       : req<NotifyEvent>('/notify/test', { method: 'POST' }),
+
+  // ⑤ 認証
+  authProviders: () =>
+    IS_DEMO
+      ? Promise.resolve({ devLogin: true, google: false })
+      : req<{ devLogin: boolean; google: boolean }>('/auth/providers'),
+
+  loginDev: (email: string, name?: string) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.loginDev(email, name))
+      : req<{ token: string; user: User }>('/auth/login/dev', {
+          method: 'POST',
+          body: JSON.stringify({ email, name }),
+        }),
+
+  me: () =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.me())
+      : req<{ user: User; workspaces: WorkspaceInfo[] }>('/auth/me'),
+
+  // ④ ワークスペース（案件）
+  listWorkspaces: () =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.listWorkspaces())
+      : req<WorkspaceInfo[]>('/workspaces'),
+
+  createWorkspace: (name: string) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.createWorkspace(name))
+      : req<WorkspaceInfo>('/workspaces', { method: 'POST', body: JSON.stringify({ name }) }),
 };

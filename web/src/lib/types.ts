@@ -28,6 +28,7 @@ export interface SessionSummary {
   agent: AgentKind;
   prompt: string;
   status: SessionStatus;
+  workspaceId: string;
   worktreePath: string | null;
   branch: string | null;
   autoAccept: boolean;

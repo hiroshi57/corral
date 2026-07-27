@@ -1,9 +1,13 @@
 // REST API ルート
 import { Router } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import type { SessionManager } from '../session/manager.js';
 import { config } from '../config.js';
 import { configuredChannels, notify } from '../notify/notifier.js';
-import type { CreateSessionInput } from '../types.js';
+import { resolveWorkspace, requirePerm } from '../auth/middleware.js';
+import { tenancy } from '../tenancy/store.js';
+import { ROLE_LABEL } from '../auth/rbac.js';
+import type { CreateSessionInput, Role } from '../types.js';
 
 export function createRouter(sessions: SessionManager): Router {
   const router = Router();
@@ -19,87 +23,110 @@ export function createRouter(sessions: SessionManager): Router {
     });
   });
 
-  // セッション一覧
-  router.get('/sessions', (_req, res) => {
-    res.json(sessions.list());
+  // 対象セッションが現在のワークスペース(案件)に属するか検証
+  const inWorkspace = (req: Request, res: Response, next: NextFunction) => {
+    if (!sessions.belongsTo(req.params.id, req.workspaceId!)) {
+      return void res.status(404).json({ error: 'この案件に該当するワーカーがありません' });
+    }
+    next();
+  };
+
+  // ---- ④ ワークスペース（案件） ----
+  router.get('/workspaces', resolveWorkspace, (req, res) => {
+    res.json(tenancy.listWorkspacesForUser(req.identity!.user.id));
   });
 
-  // セッション詳細（ログ込み）
-  router.get('/sessions/:id', (req, res) => {
+  router.post('/workspaces', resolveWorkspace, (req, res) => {
+    const { name } = req.body as { name?: string };
+    if (!name?.trim()) return res.status(400).json({ error: '案件名は必須です' });
+    const ws = tenancy.createWorkspace(name.trim(), req.identity!.user.id);
+    res.status(201).json(ws);
+  });
+
+  // メンバー一覧 / 追加（⑤ member:manage 権限）
+  router.get('/workspaces/members', resolveWorkspace, requirePerm('member:manage'), (req, res) => {
+    res.json(tenancy.membersOf(req.workspaceId!).map((m) => ({ ...m.user, role: m.role })));
+  });
+  router.post('/workspaces/members', resolveWorkspace, requirePerm('member:manage'), (req, res) => {
+    const { email, name, role } = req.body as { email?: string; name?: string; role?: Role };
+    if (!email) return res.status(400).json({ error: 'email は必須です' });
+    const user = tenancy.upsertUser({ email, name: name || email, provider: 'invited' });
+    tenancy.addMember(req.workspaceId!, user.id, role ?? 'member');
+    res.status(201).json({ ...user, role: role ?? 'member' });
+  });
+
+  // ---- セッション（案件スコープ＋RBAC） ----
+  router.get('/sessions', resolveWorkspace, requirePerm('session:view'), (req, res) => {
+    res.json(sessions.list(req.workspaceId));
+  });
+
+  router.get('/sessions/:id', resolveWorkspace, requirePerm('session:view'), inWorkspace, (req, res) => {
     const s = sessions.get(req.params.id);
     if (!s) return res.status(404).json({ error: 'not found' });
     res.json(s);
   });
 
   // 作成（台数指定で一括）
-  router.post('/sessions', async (req, res) => {
+  router.post('/sessions', resolveWorkspace, requirePerm('session:create'), async (req, res) => {
     const body = req.body as CreateSessionInput;
     if (!body?.prompt || !body?.agent) {
       return res.status(400).json({ error: 'agent と prompt は必須です' });
     }
     try {
-      const created = await sessions.createBatch(body);
+      const created = await sessions.createBatch(body, req.workspaceId!);
       res.status(201).json(created);
     } catch (e) {
-      // ② 予算ハードキャップ等
-      res.status(402).json({ error: (e as Error).message });
+      res.status(402).json({ error: (e as Error).message }); // ② 予算ハードキャップ等
     }
   });
 
-  // 追加指示（個別）
-  router.post('/sessions/:id/instruct', (req, res) => {
+  router.post('/sessions/:id/instruct', resolveWorkspace, requirePerm('session:instruct'), inWorkspace, (req, res) => {
     const { text } = req.body as { text: string };
     if (!text) return res.status(400).json({ error: 'text は必須です' });
-    const ok = sessions.instruct(req.params.id, text);
-    res.json({ ok });
+    res.json({ ok: sessions.instruct(req.params.id, text) });
   });
 
-  // broadcast（全員 or 対象）
-  router.post('/broadcast', (req, res) => {
+  // broadcast（現在の案件のワーカーのみ）
+  router.post('/broadcast', resolveWorkspace, requirePerm('session:instruct'), (req, res) => {
     const { text, targetIds } = req.body as { text: string; targetIds?: string[] };
     if (!text) return res.status(400).json({ error: 'text は必須です' });
-    const count = sessions.broadcast(text, targetIds);
-    res.json({ delivered: count });
+    const ids = (targetIds ?? sessions.list(req.workspaceId).map((s) => s.id)).filter((id) =>
+      sessions.belongsTo(id, req.workspaceId!)
+    );
+    res.json({ delivered: sessions.broadcast(text, ids) });
   });
 
-  // diff 取得
-  router.get('/sessions/:id/diff', async (req, res) => {
+  router.get('/sessions/:id/diff', resolveWorkspace, requirePerm('session:view'), inWorkspace, async (req, res) => {
     res.json({ diff: await sessions.diff(req.params.id) });
   });
 
-  // 承認（checkpoint）
-  router.post('/sessions/:id/approve', async (req, res) => {
+  router.post('/sessions/:id/approve', resolveWorkspace, requirePerm('session:approve'), inWorkspace, async (req, res) => {
     const { message } = req.body as { message?: string };
-    const ok = await sessions.approve(req.params.id, message ?? 'corral: approved');
-    res.json({ ok });
+    res.json({ ok: await sessions.approve(req.params.id, message ?? 'corral: approved') });
   });
 
-  // 停止
-  router.post('/sessions/:id/stop', (req, res) => {
+  router.post('/sessions/:id/stop', resolveWorkspace, requirePerm('session:instruct'), inWorkspace, (req, res) => {
     res.json({ ok: sessions.stop(req.params.id) });
   });
 
-  // 破棄
-  router.delete('/sessions/:id', async (req, res) => {
+  router.delete('/sessions/:id', resolveWorkspace, requirePerm('session:create'), inWorkspace, async (req, res) => {
     res.json({ ok: await sessions.remove(req.params.id) });
   });
 
-  // ② FinOps サマリ
-  router.get('/finops', (_req, res) => {
-    res.json(sessions.finopsSummary());
+  // ② FinOps サマリ（案件スコープ）
+  router.get('/finops', resolveWorkspace, requirePerm('session:view'), (req, res) => {
+    res.json(sessions.finopsSummary(req.workspaceId));
   });
 
   // ① 通知テスト送信
-  router.post('/notify/test', async (_req, res) => {
-    const event = await notify({
-      sessionId: 'test',
-      title: '通知テスト',
-      status: 'done',
-      branch: null,
-      demo: config.demo,
-    });
-    res.json(event);
+  router.post('/notify/test', resolveWorkspace, requirePerm('session:view'), async (_req, res) => {
+    res.json(
+      await notify({ sessionId: 'test', title: '通知テスト', status: 'done', branch: null, demo: config.demo })
+    );
   });
+
+  // ロール表示ラベル（UI 補助）
+  router.get('/roles', (_req, res) => res.json(ROLE_LABEL));
 
   return router;
 }

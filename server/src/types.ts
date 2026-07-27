@@ -12,6 +12,50 @@ export type SessionStatus =
 /** 対応エージェント種別 */
 export type AgentKind = 'claude' | 'codex' | 'gemini' | 'aider' | 'custom';
 
+// --- ④ マルチテナント（ワークスペース＝案件） / ⑤ ユーザー・ロール ---
+
+/** ロール（権限の役割） */
+export type Role = 'owner' | 'admin' | 'member' | 'viewer';
+
+/** 権限 */
+export type Permission =
+  | 'workspace:manage'
+  | 'member:manage'
+  | 'session:create'
+  | 'session:instruct'
+  | 'session:approve'
+  | 'session:view';
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  /** 認証プロバイダ（dev / google / token） */
+  provider: string;
+}
+
+/** ワークスペース＝案件（プロジェクト）の器 */
+export interface Workspace {
+  id: string;
+  /** 案件名 */
+  name: string;
+  createdAt: number;
+  ownerId: string;
+}
+
+export interface Membership {
+  workspaceId: string;
+  userId: string;
+  role: Role;
+}
+
+/** 認証済みの実行主体 */
+export interface Identity {
+  user: User;
+  /** マシントークン（x-corral-token）由来か */
+  machine: boolean;
+}
+
 /** ② FinOps: 1セッションのトークン/コスト消費 */
 export interface Usage {
   inputTokens: number;
@@ -49,6 +93,8 @@ export interface Session {
   status: SessionStatus;
   /** git worktree のパス */
   worktreePath: string | null;
+  /** ④ 所属ワークスペース（案件）ID */
+  workspaceId: string;
   /** 作業ブランチ名 */
   branch: string | null;
   /** auto-accept（確認を自動承認） */
