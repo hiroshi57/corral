@@ -96,6 +96,10 @@ corral/
 
 ---
 
+## 外販化プラン
+
+SaaS 化に向けた追加機能30提案・ロードマップ・価格プラン案は [docs/productization.md](docs/productization.md) を参照。
+
 ## ロードマップ（将来）
 
 - diff へのインラインコメント（Vibe Kanban）
