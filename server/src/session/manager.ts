@@ -11,6 +11,8 @@ import {
 } from '../git/worktree.js';
 import { createRunner, type Runner } from './runner.js';
 import { getProfile } from '../agents/registry.js';
+import { accrueRun, emptyUsage } from '../finops/pricing.js';
+import { notify } from '../notify/notifier.js';
 import type {
   AgentKind,
   CreateSessionInput,
@@ -31,6 +33,10 @@ const AGENT_LABEL: Record<AgentKind, string> = {
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, Session>();
   private runners = new Map<string, Runner>();
+  /** run 開始時刻（duration 計測用） */
+  private runStart = new Map<string, number>();
+  /** run 中の出力文字数（本番のトークン概算用） */
+  private runOutChars = new Map<string, number>();
 
   list(): SessionSummary[] {
     return [...this.sessions.values()].map(toSummary);
@@ -42,6 +48,11 @@ export class SessionManager extends EventEmitter {
 
   /** 台数指定で複数セッションを一括作成（uzi の --agents claude:3 相当） */
   async createBatch(input: CreateSessionInput): Promise<SessionSummary[]> {
+    // ② 予算ハードキャップ到達時は新規起動を止める
+    if (this.budgetBlocked()) {
+      this.checkBudget();
+      throw new Error('予算上限（ハードキャップ）に達したため新規起動を停止しました');
+    }
     const count = Math.max(1, Math.min(input.count ?? 1, 10));
     const created: SessionSummary[] = [];
     for (let i = 0; i < count; i++) {
@@ -72,6 +83,9 @@ export class SessionManager extends EventEmitter {
       changedFiles: 0,
       turns: [input.prompt],
       pendingFollowups: [],
+      usage: emptyUsage(),
+      interventions: 0,
+      durationMs: 0,
       logs: [],
     };
     this.sessions.set(id, session);
@@ -97,6 +111,8 @@ export class SessionManager extends EventEmitter {
    */
   private startRun(session: Session, text: string, isFollowup: boolean): void {
     this.setStatus(session, 'running');
+    this.runStart.set(session.id, Date.now());
+    this.runOutChars.set(session.id, 0);
     const runner = createRunner(
       session.agent,
       text,
@@ -107,6 +123,7 @@ export class SessionManager extends EventEmitter {
     this.runners.set(session.id, runner);
 
     runner.on('output', (stream, chunk) => {
+      this.runOutChars.set(session.id, (this.runOutChars.get(session.id) ?? 0) + chunk.length);
       for (const line of chunk.split(/\r?\n/)) {
         if (line.length > 0) this.appendLog(session, stream, line);
       }
@@ -116,6 +133,17 @@ export class SessionManager extends EventEmitter {
       this.runners.delete(session.id);
       session.exitCode = code;
       session.changedFiles = await countChanges(session.worktreePath!);
+
+      // ② FinOps: この run の使用量とコスト、③ 所要時間を加算
+      const started = this.runStart.get(session.id) ?? Date.now();
+      session.durationMs += Date.now() - started;
+      session.usage = accrueRun(session.usage, session.agent, {
+        demo: config.demo,
+        outputChars: this.runOutChars.get(session.id) ?? 0,
+      });
+      this.runStart.delete(session.id);
+      this.runOutChars.delete(session.id);
+      this.checkBudget();
 
       // 実行中に届いた追加指示があれば、まず継続runとして消化する
       if (code !== null && session.pendingFollowups.length > 0) {
@@ -159,6 +187,7 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session) return false;
     session.turns.push(text);
+    session.interventions += 1; // ③ 人手介入としてカウント
 
     if (this.runners.has(id)) {
       session.pendingFollowups.push(text);
@@ -218,11 +247,73 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
+  /** ② FinOps サマリ（API 用） */
+  finopsSummary() {
+    const sessions = [...this.sessions.values()];
+    const total = sessions.reduce((a, s) => a + s.usage.costUsd, 0);
+    const byAgent: Record<string, { costUsd: number; inputTokens: number; outputTokens: number; sessions: number }> = {};
+    for (const s of sessions) {
+      const k = s.agent;
+      byAgent[k] ??= { costUsd: 0, inputTokens: 0, outputTokens: 0, sessions: 0 };
+      byAgent[k].costUsd += s.usage.costUsd;
+      byAgent[k].inputTokens += s.usage.inputTokens;
+      byAgent[k].outputTokens += s.usage.outputTokens;
+      byAgent[k].sessions += 1;
+    }
+    return {
+      totalUsd: total,
+      budgetUsd: config.finops.budgetUsd,
+      alertRatio: config.finops.alertRatio,
+      hardCap: config.finops.hardCap,
+      byAgent,
+    };
+  }
+
+  private totalCost(): number {
+    let t = 0;
+    for (const s of this.sessions.values()) t += s.usage.costUsd;
+    return t;
+  }
+
+  /** 予算判定してアラート/超過イベントを発火 */
+  private checkBudget(): void {
+    const budget = config.finops.budgetUsd;
+    if (!budget) return;
+    const total = this.totalCost();
+    if (total >= budget) {
+      this.emit('event', { type: 'budget', level: 'exceeded', totalUsd: total, budgetUsd: budget });
+    } else if (total >= budget * config.finops.alertRatio) {
+      this.emit('event', { type: 'budget', level: 'alert', totalUsd: total, budgetUsd: budget });
+    }
+  }
+
+  /** 予算ハードキャップに達しているか（新規作成の抑止用） */
+  private budgetBlocked(): boolean {
+    const budget = config.finops.budgetUsd;
+    return !!budget && config.finops.hardCap && this.totalCost() >= budget;
+  }
+
   // --- 内部ヘルパ ---
   private setStatus(session: Session, status: SessionStatus): void {
     session.status = status;
     session.updatedAt = Date.now();
     this.emitUpdate(session);
+    // ① 節目のステータスは通知（設定チャネル＋アプリ内）
+    if (config.notify.events.includes(status)) {
+      void this.dispatchNotify(session);
+    }
+  }
+
+  private async dispatchNotify(session: Session): Promise<void> {
+    const event = await notify({
+      sessionId: session.id,
+      title: session.title,
+      status: session.status,
+      branch: session.branch,
+      demo: config.demo,
+    });
+    this.appendLog(session, 'system', `通知送信: ${event.channels.join(', ')}`);
+    this.emit('event', { type: 'notify', event });
   }
 
   private appendLog(session: Session, stream: LogLine['stream'], text: string): void {

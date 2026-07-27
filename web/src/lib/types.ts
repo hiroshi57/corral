@@ -15,6 +15,13 @@ export interface LogLine {
   text: string;
 }
 
+export interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  runs: number;
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -28,13 +35,40 @@ export interface SessionSummary {
   updatedAt: number;
   exitCode: number | null;
   changedFiles: number;
+  turns?: string[];
+  pendingFollowups?: string[];
+  usage: Usage;
+  interventions: number;
+  durationMs: number;
+}
+
+export interface NotifyEvent {
+  ts: number;
+  sessionId: string;
+  title: string;
+  status: SessionStatus;
+  channels: string[];
+  message: string;
 }
 
 export type ServerEvent =
   | { type: 'snapshot'; sessions: SessionSummary[] }
   | { type: 'session:update'; session: SessionSummary }
   | { type: 'session:removed'; id: string }
-  | { type: 'log'; id: string; line: LogLine };
+  | { type: 'log'; id: string; line: LogLine }
+  | { type: 'notify'; event: NotifyEvent }
+  | { type: 'budget'; level: 'alert' | 'exceeded'; totalUsd: number; budgetUsd: number };
+
+export interface FinopsSummary {
+  totalUsd: number;
+  budgetUsd: number;
+  alertRatio: number;
+  hardCap: boolean;
+  byAgent: Record<
+    string,
+    { costUsd: number; inputTokens: number; outputTokens: number; sessions: number }
+  >;
+}
 
 export const STATUS_META: Record<
   SessionStatus,

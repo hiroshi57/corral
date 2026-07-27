@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import type { SessionManager } from '../session/manager.js';
 import { config } from '../config.js';
+import { configuredChannels, notify } from '../notify/notifier.js';
 import type { CreateSessionInput } from '../types.js';
 
 export function createRouter(sessions: SessionManager): Router {
@@ -9,7 +10,13 @@ export function createRouter(sessions: SessionManager): Router {
 
   // ヘルスチェック / 設定
   router.get('/health', (_req, res) => {
-    res.json({ ok: true, demo: config.demo, repoRoot: config.repoRoot });
+    res.json({
+      ok: true,
+      demo: config.demo,
+      repoRoot: config.repoRoot,
+      notifyChannels: configuredChannels(),
+      budgetUsd: config.finops.budgetUsd,
+    });
   });
 
   // セッション一覧
@@ -30,8 +37,13 @@ export function createRouter(sessions: SessionManager): Router {
     if (!body?.prompt || !body?.agent) {
       return res.status(400).json({ error: 'agent と prompt は必須です' });
     }
-    const created = await sessions.createBatch(body);
-    res.status(201).json(created);
+    try {
+      const created = await sessions.createBatch(body);
+      res.status(201).json(created);
+    } catch (e) {
+      // ② 予算ハードキャップ等
+      res.status(402).json({ error: (e as Error).message });
+    }
   });
 
   // 追加指示（個別）
@@ -70,6 +82,23 @@ export function createRouter(sessions: SessionManager): Router {
   // 破棄
   router.delete('/sessions/:id', async (req, res) => {
     res.json({ ok: await sessions.remove(req.params.id) });
+  });
+
+  // ② FinOps サマリ
+  router.get('/finops', (_req, res) => {
+    res.json(sessions.finopsSummary());
+  });
+
+  // ① 通知テスト送信
+  router.post('/notify/test', async (_req, res) => {
+    const event = await notify({
+      sessionId: 'test',
+      title: '通知テスト',
+      status: 'done',
+      branch: null,
+      demo: config.demo,
+    });
+    res.json(event);
   });
 
   return router;

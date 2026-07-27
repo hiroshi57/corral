@@ -3,9 +3,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { CommandDeck } from './components/CommandDeck';
 import { WorkerCard } from './components/WorkerCard';
 import { DetailPanel } from './components/DetailPanel';
+import { NotificationCenter } from './components/NotificationCenter';
+import { Dashboard } from './components/Dashboard';
 import { api } from './lib/api';
 import { connectWs } from './lib/ws';
-import type { LogLine, SessionStatus, SessionSummary } from './lib/types';
+import type { LogLine, NotifyEvent, SessionStatus, SessionSummary } from './lib/types';
 import { STATUS_META } from './lib/types';
 
 const STATUS_ORDER: SessionStatus[] = [
@@ -17,14 +19,32 @@ const STATUS_ORDER: SessionStatus[] = [
   'stopped',
 ];
 
+type View = 'command' | 'dashboard';
+
+interface BudgetBanner {
+  level: 'alert' | 'exceeded';
+  totalUsd: number;
+  budgetUsd: number;
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<Record<string, SessionSummary>>({});
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [demo, setDemo] = useState(false);
+  const [view, setView] = useState<View>('command');
+  const [notifications, setNotifications] = useState<NotifyEvent[]>([]);
+  const [channels, setChannels] = useState<string[]>([]);
+  const [budget, setBudget] = useState<BudgetBanner | null>(null);
 
   useEffect(() => {
-    api.health().then((h) => setDemo(h.demo)).catch(() => {});
+    api
+      .health()
+      .then((h) => {
+        setDemo(h.demo);
+        setChannels(h.notifyChannels ?? []);
+      })
+      .catch(() => {});
     const disconnect = connectWs((e) => {
       switch (e.type) {
         case 'snapshot':
@@ -46,6 +66,12 @@ export default function App() {
             ...prev,
             [e.id]: [...(prev[e.id] ?? []), e.line].slice(-1000),
           }));
+          break;
+        case 'notify':
+          setNotifications((prev) => [...prev, e.event].slice(-100));
+          break;
+        case 'budget':
+          setBudget({ level: e.level, totalUsd: e.totalUsd, budgetUsd: e.budgetUsd });
           break;
       }
     });
@@ -74,74 +100,122 @@ export default function App() {
     return c;
   }, [sessions]);
 
-  const refresh = () => api.listSessions().then((list) =>
-    setSessions(Object.fromEntries(list.map((s) => [s.id, s])))
-  );
+  const refresh = () =>
+    api.listSessions().then((list) => setSessions(Object.fromEntries(list.map((s) => [s.id, s]))));
 
   const selectedSession = selected ? sessions[selected] ?? null : null;
 
+  const TabBtn = ({ v, label }: { v: View; label: string }) => (
+    <button
+      onClick={() => setView(v)}
+      className={`rounded-lg px-3 py-1 text-sm ${
+        view === v ? 'bg-accent text-black font-bold' : 'text-slate-300 hover:bg-edge'
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full flex-col">
       {/* ヘッダ */}
-      <header className="flex items-center gap-3 px-5 py-3 border-b border-edge bg-panel">
+      <header className="flex items-center gap-3 border-b border-edge bg-panel px-5 py-3">
         <span className="text-xl">🐎</span>
-        <h1 className="font-bold text-lg">Corral</h1>
-        <span className="text-xs text-slate-500">エージェント司令塔</span>
+        <h1 className="text-lg font-bold">Corral</h1>
+        <span className="hidden text-xs text-slate-500 sm:inline">エージェント司令塔</span>
         {demo && (
-          <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded px-2 py-0.5">
+          <span className="rounded border border-amber-500/30 bg-amber-500/20 px-2 py-0.5 text-[10px] text-amber-300">
             DEMO モード
           </span>
         )}
-        <div className="ml-auto flex items-center gap-3 text-xs">
-          {STATUS_ORDER.map(
-            (st) =>
+        <div className="ml-3 flex items-center gap-1 rounded-lg border border-edge bg-panel2 p-0.5">
+          <TabBtn v="command" label="🎯 司令塔" />
+          <TabBtn v="dashboard" label="📊 ダッシュボード" />
+        </div>
+
+        <div className="ml-auto flex items-center gap-3">
+          <div className="hidden items-center gap-3 text-xs lg:flex">
+            {STATUS_ORDER.map((st) =>
               counts[st] ? (
                 <span key={st} className="flex items-center gap-1">
-                  <span className={`w-2 h-2 rounded-full ${STATUS_META[st].dot}`} />
+                  <span className={`h-2 w-2 rounded-full ${STATUS_META[st].dot}`} />
                   <span className={STATUS_META[st].color}>{STATUS_META[st].label}</span>
                   <span className="text-slate-400">{counts[st]}</span>
                 </span>
               ) : null
-          )}
+            )}
+          </div>
+          <NotificationCenter
+            notifications={notifications}
+            channels={channels}
+            onSelect={(id) => {
+              setView('command');
+              setSelected(id);
+            }}
+            onClear={() => setNotifications([])}
+          />
         </div>
       </header>
 
-      {/* 本体：左=司令塔+一覧 / 右=詳細 */}
-      <div className="flex-1 flex min-h-0">
-        <div className="w-[420px] shrink-0 flex flex-col gap-3 p-4 overflow-auto border-r border-edge">
-          <CommandDeck onChanged={refresh} />
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-300">
-              ワーカー（{sorted.length}）
-            </h2>
-          </div>
-          <div className="flex flex-col gap-2">
-            {sorted.length === 0 && (
-              <div className="text-xs text-slate-600 border border-dashed border-edge rounded-xl p-6 text-center">
-                まだワーカーがいません。
-                <br />
-                上の司令塔からタスクを起動してください。
-              </div>
-            )}
-            {sorted.map((s) => (
-              <WorkerCard
-                key={s.id}
-                session={s}
-                active={s.id === selected}
-                onSelect={() => setSelected(s.id)}
-              />
-            ))}
-          </div>
+      {/* 予算バナー */}
+      {budget && (
+        <div
+          className={`flex items-center gap-2 px-5 py-2 text-sm ${
+            budget.level === 'exceeded'
+              ? 'bg-rose-500/15 text-rose-200'
+              : 'bg-amber-500/15 text-amber-200'
+          }`}
+        >
+          <span>{budget.level === 'exceeded' ? '🚫 予算超過' : '⚠️ 予算アラート'}</span>
+          <span>
+            累計 ${budget.totalUsd.toFixed(2)} / 予算 ${budget.budgetUsd.toFixed(2)}
+          </span>
+          <button onClick={() => setBudget(null)} className="ml-auto text-xs opacity-70 hover:opacity-100">
+            閉じる
+          </button>
         </div>
+      )}
 
-        <div className="flex-1 flex min-h-0 p-4">
-          <DetailPanel
-            session={selectedSession}
-            logs={selected ? logs[selected] ?? [] : []}
-            onChanged={refresh}
-          />
+      {/* 本体 */}
+      {view === 'dashboard' ? (
+        <div className="flex flex-1 min-h-0 flex-col p-4">
+          <Dashboard sessions={Object.values(sessions)} />
         </div>
-      </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <div className="flex w-[420px] shrink-0 flex-col gap-3 overflow-auto border-r border-edge p-4">
+            <CommandDeck onChanged={refresh} />
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-300">ワーカー（{sorted.length}）</h2>
+            </div>
+            <div className="flex flex-col gap-2">
+              {sorted.length === 0 && (
+                <div className="rounded-xl border border-dashed border-edge p-6 text-center text-xs text-slate-600">
+                  まだワーカーがいません。
+                  <br />
+                  上の司令塔からタスクを起動してください。
+                </div>
+              )}
+              {sorted.map((s) => (
+                <WorkerCard
+                  key={s.id}
+                  session={s}
+                  active={s.id === selected}
+                  onSelect={() => setSelected(s.id)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-1 p-4">
+            <DetailPanel
+              session={selectedSession}
+              logs={selected ? logs[selected] ?? [] : []}
+              onChanged={refresh}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

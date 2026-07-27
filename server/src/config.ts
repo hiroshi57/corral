@@ -38,6 +38,28 @@ export const config = {
   ],
   /** Host ヘッダとして許可するホスト名（DNSリバインディング対策） */
   allowedHosts: new Set(['127.0.0.1', 'localhost', '[::1]', '::1', host]),
+
+  // --- ① 通知 ---
+  notify: {
+    /** Chatwork API トークン（国内向け通知） */
+    chatworkToken: process.env.CORRAL_CHATWORK_TOKEN ?? '',
+    /** Chatwork ルームID */
+    chatworkRoom: process.env.CORRAL_CHATWORK_ROOM ?? '',
+    /** Slack Incoming Webhook URL */
+    slackWebhook: process.env.CORRAL_SLACK_WEBHOOK ?? '',
+    /** 通知するステータス（既定: 要確認/完了/エラー） */
+    events: (process.env.CORRAL_NOTIFY_EVENTS ?? 'needs_review,done,error').split(','),
+  },
+
+  // --- ② FinOps（コスト計測） ---
+  finops: {
+    /** 予算（USD, 累計）。0 = 無制限 */
+    budgetUsd: Number(process.env.CORRAL_BUDGET_USD ?? 0),
+    /** 予算到達で新規セッションを止めるか */
+    hardCap: process.env.CORRAL_BUDGET_HARDCAP === '1',
+    /** アラート閾値（予算に対する割合 0-1） */
+    alertRatio: Number(process.env.CORRAL_BUDGET_ALERT ?? 0.8),
+  },
 };
 
 export type Config = typeof config;

@@ -1,5 +1,5 @@
 // REST API クライアント（デモモード時はブラウザ内バックエンドへ委譲）
-import type { AgentKind, LogLine, SessionSummary } from './types';
+import type { AgentKind, FinopsSummary, LogLine, NotifyEvent, SessionSummary } from './types';
 import { demoBackend, IS_DEMO } from './demo';
 
 const BASE = '/api';
@@ -20,8 +20,20 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () =>
     IS_DEMO
-      ? Promise.resolve({ ok: true, demo: true, repoRoot: '(browser demo)' })
-      : req<{ ok: boolean; demo: boolean; repoRoot: string }>('/health'),
+      ? Promise.resolve({
+          ok: true,
+          demo: true,
+          repoRoot: '(browser demo)',
+          notifyChannels: [] as string[],
+          budgetUsd: 0,
+        })
+      : req<{
+          ok: boolean;
+          demo: boolean;
+          repoRoot: string;
+          notifyChannels?: string[];
+          budgetUsd?: number;
+        }>('/health'),
 
   listSessions: () =>
     IS_DEMO ? Promise.resolve(demoBackend.list()) : req<SessionSummary[]>('/sessions'),
@@ -77,4 +89,19 @@ export const api = {
 
   remove: (id: string) =>
     IS_DEMO ? Promise.resolve(demoBackend.remove(id)) : req<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
+
+  finops: () =>
+    IS_DEMO ? Promise.resolve(demoBackend.finops()) : req<FinopsSummary>('/finops'),
+
+  notifyTest: () =>
+    IS_DEMO
+      ? Promise.resolve<NotifyEvent>({
+          ts: Date.now(),
+          sessionId: 'test',
+          title: '通知テスト',
+          status: 'done',
+          channels: ['app'],
+          message: '✅ 通知テスト',
+        })
+      : req<NotifyEvent>('/notify/test', { method: 'POST' }),
 };

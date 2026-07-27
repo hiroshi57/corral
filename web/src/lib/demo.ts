@@ -6,10 +6,12 @@
 // ※ 実エージェント起動・git worktree・commit は行わない（UI 確認専用）。
 import type {
   AgentKind,
+  FinopsSummary,
   LogLine,
   ServerEvent,
   SessionStatus,
   SessionSummary,
+  Usage,
 } from './types';
 
 interface DemoSession extends SessionSummary {
@@ -17,6 +19,7 @@ interface DemoSession extends SessionSummary {
   pendingFollowups: string[];
   logs: LogLine[];
   timers: number[];
+  runStartTs: number;
 }
 
 const AGENT_LABEL: Record<AgentKind, string> = {
@@ -26,6 +29,17 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   aider: 'Aider',
   custom: 'カスタム',
 };
+
+// ② FinOps: 参考単価（サーバの DEFAULT_PRICING と同値・1MトークンあたりUSD）
+const PRICING: Record<AgentKind, { i: number; o: number }> = {
+  claude: { i: 3, o: 15 },
+  codex: { i: 2.5, o: 10 },
+  gemini: { i: 1.25, o: 5 },
+  aider: { i: 2.5, o: 10 },
+  custom: { i: 0, o: 0 },
+};
+
+const NOTIFY_EVENTS: SessionStatus[] = ['needs_review', 'done', 'error', 'stopped'];
 
 let counter = 0;
 const id8 = () => `d${(++counter).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -83,8 +97,12 @@ class DemoBackend {
         changedFiles: 0,
         turns: [input.prompt],
         pendingFollowups: [],
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, runs: 0 },
+        interventions: 0,
+        durationMs: 0,
         logs: [],
         timers: [],
+        runStartTs: 0,
       };
       this.sessions.set(id, s);
       this.update(s);
@@ -99,6 +117,7 @@ class DemoBackend {
     const s = this.sessions.get(id);
     if (!s) return { ok: false };
     s.turns.push(text);
+    s.interventions += 1; // ③ 人手介入
     if (s.status === 'running') {
       s.pendingFollowups.push(text);
       this.log(s, 'system', `指示を受付（実行中のため完了後に継続）: ${text}`);
@@ -164,6 +183,7 @@ class DemoBackend {
   // --- 内部 ---
   private run(s: DemoSession, text: string, isFollowup: boolean): void {
     this.setStatus(s, 'running');
+    s.runStartTs = Date.now();
     const label = AGENT_LABEL[s.agent];
     const steps: Array<() => void> = [
       () => this.log(s, 'stdout', `${label} を worktree で起動しました。`),
@@ -184,6 +204,19 @@ class DemoBackend {
   }
 
   private onExit(s: DemoSession): void {
+    // ② FinOps: この run の使用量・コスト、③ 所要時間を加算
+    const inTok = 1500 + Math.floor(Math.random() * 4000);
+    const outTok = 800 + Math.floor(Math.random() * 3000);
+    const p = PRICING[s.agent] ?? PRICING.custom;
+    const u: Usage = {
+      inputTokens: s.usage.inputTokens + inTok,
+      outputTokens: s.usage.outputTokens + outTok,
+      costUsd: s.usage.costUsd + (inTok / 1_000_000) * p.i + (outTok / 1_000_000) * p.o,
+      runs: s.usage.runs + 1,
+    };
+    s.usage = u;
+    if (s.runStartTs) s.durationMs += Date.now() - s.runStartTs;
+
     if (s.pendingFollowups.length > 0) {
       const next = s.pendingFollowups.shift()!;
       this.log(s, 'system', `継続: ${next}`);
@@ -198,6 +231,37 @@ class DemoBackend {
     s.status = status;
     s.updatedAt = Date.now();
     this.update(s);
+    // ① 通知（デモは外部送信せずアプリ内通知のみ）
+    if (NOTIFY_EVENTS.includes(status)) {
+      const mark =
+        status === 'done' ? '✅' : status === 'error' ? '❌' : status === 'stopped' ? '⏹️' : '👀';
+      this.emit({
+        type: 'notify',
+        event: {
+          ts: Date.now(),
+          sessionId: s.id,
+          title: s.title,
+          status,
+          channels: ['app'],
+          message: `${mark} ${s.title}`,
+        },
+      });
+    }
+  }
+
+  /** ② FinOps サマリ */
+  finops(): FinopsSummary {
+    const sessions = [...this.sessions.values()];
+    const totalUsd = sessions.reduce((a, s) => a + s.usage.costUsd, 0);
+    const byAgent: FinopsSummary['byAgent'] = {};
+    for (const s of sessions) {
+      byAgent[s.agent] ??= { costUsd: 0, inputTokens: 0, outputTokens: 0, sessions: 0 };
+      byAgent[s.agent].costUsd += s.usage.costUsd;
+      byAgent[s.agent].inputTokens += s.usage.inputTokens;
+      byAgent[s.agent].outputTokens += s.usage.outputTokens;
+      byAgent[s.agent].sessions += 1;
+    }
+    return { totalUsd, budgetUsd: 0, alertRatio: 0.8, hardCap: false, byAgent };
   }
 
   private log(s: DemoSession, stream: LogLine['stream'], text: string): void {
@@ -214,9 +278,10 @@ class DemoBackend {
 }
 
 function toSummary(s: DemoSession): SessionSummary {
-  const { logs, timers, ...rest } = s;
+  const { logs, timers, runStartTs, ...rest } = s;
   void logs;
   void timers;
+  void runStartTs;
   return rest;
 }
 

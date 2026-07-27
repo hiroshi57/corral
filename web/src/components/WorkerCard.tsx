@@ -34,6 +34,11 @@ export function WorkerCard({
         {session.changedFiles > 0 && (
           <span className="text-amber-300">±{session.changedFiles} ファイル</span>
         )}
+        {session.usage?.costUsd > 0 && (
+          <span className="text-emerald-300/80" title="推定コスト">
+            ${session.usage.costUsd.toFixed(session.usage.costUsd < 1 ? 3 : 2)}
+          </span>
+        )}
         {session.autoAccept && <span className="text-sky-400">auto</span>}
       </div>
     </button>

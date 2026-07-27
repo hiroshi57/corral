@@ -12,6 +12,26 @@ export type SessionStatus =
 /** 対応エージェント種別 */
 export type AgentKind = 'claude' | 'codex' | 'gemini' | 'aider' | 'custom';
 
+/** ② FinOps: 1セッションのトークン/コスト消費 */
+export interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  /** 継続runの回数（＝エージェント起動回数） */
+  runs: number;
+}
+
+/** ① 通知イベント */
+export interface NotifyEvent {
+  ts: number;
+  sessionId: string;
+  title: string;
+  status: SessionStatus;
+  /** 送信チャネルの結果 */
+  channels: string[];
+  message: string;
+}
+
 /** 出力ログの1行 */
 export interface LogLine {
   ts: number;
@@ -45,6 +65,12 @@ export interface Session {
   turns: string[];
   /** 実行中に届いた追加指示。現ランの終了後に継続runとして流す */
   pendingFollowups: string[];
+  /** ② FinOps: 消費トークン/コスト */
+  usage: Usage;
+  /** ③ 生産性: 人手介入回数（追加指示/差し戻しの回数）。自動完了なら 0 */
+  interventions: number;
+  /** 実行に要した総ミリ秒（各runの合計） */
+  durationMs: number;
   /** 直近ログ（リングバッファ） */
   logs: LogLine[];
 }
@@ -57,7 +83,9 @@ export type ServerEvent =
   | { type: 'snapshot'; sessions: SessionSummary[] }
   | { type: 'session:update'; session: SessionSummary }
   | { type: 'session:removed'; id: string }
-  | { type: 'log'; id: string; line: LogLine };
+  | { type: 'log'; id: string; line: LogLine }
+  | { type: 'notify'; event: NotifyEvent }
+  | { type: 'budget'; level: 'alert' | 'exceeded'; totalUsd: number; budgetUsd: number };
 
 /** セッション作成リクエスト */
 export interface CreateSessionInput {
