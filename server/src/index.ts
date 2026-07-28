@@ -46,6 +46,8 @@ app.use(
 );
 
 app.use(express.json({ limit: '2mb' }));
+// SAML ACS は application/x-www-form-urlencoded で POST される
+app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
 const sessions = new SessionManager();
 // ⑤ 認証ルート（token or セッション発行）。identity 解決の前に公開

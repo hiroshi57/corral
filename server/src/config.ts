@@ -63,6 +63,28 @@ export const config = {
       clientSecret: process.env.CORRAL_GOOGLE_CLIENT_SECRET ?? '',
       redirectUri: process.env.CORRAL_GOOGLE_REDIRECT ?? '',
     },
+    /** SAML 2.0 SSO（Okta/Azure AD 等・設定時のみ有効） */
+    saml: {
+      entryPoint: process.env.CORRAL_SAML_ENTRY_POINT ?? '', // IdP のログインURL
+      issuer: process.env.CORRAL_SAML_ISSUER ?? 'corral', // SP エンティティID
+      /** IdP の署名検証用証明書(PEM本文) */
+      idpCert: (process.env.CORRAL_SAML_IDP_CERT ?? '').replace(/\\n/g, '\n'),
+      /** ACS(コールバック) URL */
+      callbackUrl: process.env.CORRAL_SAML_CALLBACK ?? '',
+    },
+  },
+
+  // --- 監査ログ / SIEM 連携 ---
+  audit: {
+    enabled: process.env.CORRAL_AUDIT !== '0',
+    /** JSONL 保存先 */
+    file: process.env.CORRAL_AUDIT_FILE ?? path.join(corralRoot, '.corral', 'audit.jsonl'),
+    /** SIEM 転送先（HTTP Webhook。Splunk HEC / Datadog / 汎用） */
+    siemWebhook: process.env.CORRAL_SIEM_WEBHOOK ?? '',
+    /** SIEM 認証ヘッダ（例: "Authorization: Splunk <token>"） */
+    siemAuthHeader: process.env.CORRAL_SIEM_AUTH_HEADER ?? '',
+    /** メモリ保持する最大件数（API用） */
+    maxInMemory: Number(process.env.CORRAL_AUDIT_MEM ?? 5000),
   },
 
   // --- #20 ポリシーガードレール ---

@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { verifySession } from './tokens.js';
 import { can } from './rbac.js';
 import { tenancy, MACHINE_USER } from '../tenancy/store.js';
+import { audit } from '../audit/log.js';
 import type { Identity, Permission, Role } from '../types.js';
 
 // Express の Request に識別情報を付与
@@ -66,6 +67,16 @@ export function resolveWorkspace(req: Request, res: Response, next: NextFunction
 export function requirePerm(perm: Permission) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.role || !can(req.role, perm)) {
+      // 監査: 権限拒否を記録
+      audit.record({
+        actorId: req.identity?.user.id ?? 'anon',
+        actorEmail: req.identity?.user.email ?? 'anon',
+        action: `perm.denied:${perm}`,
+        workspaceId: req.workspaceId ?? null,
+        target: `${req.method} ${req.path}`,
+        outcome: 'denied',
+        ip: req.ip,
+      });
       return void res.status(403).json({ error: `権限がありません（${perm}）` });
     }
     next();

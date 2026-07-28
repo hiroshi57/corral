@@ -9,6 +9,7 @@ const MATRIX: Record<Role, Permission[]> = {
     'session:instruct',
     'session:approve',
     'session:view',
+    'audit:view',
   ],
   admin: [
     'workspace:manage',
@@ -17,6 +18,7 @@ const MATRIX: Record<Role, Permission[]> = {
     'session:instruct',
     'session:approve',
     'session:view',
+    'audit:view',
   ],
   member: ['session:create', 'session:instruct', 'session:approve', 'session:view'],
   viewer: ['session:view'],

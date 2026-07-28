@@ -24,7 +24,21 @@ export type Permission =
   | 'session:create'
   | 'session:instruct'
   | 'session:approve'
-  | 'session:view';
+  | 'session:view'
+  | 'audit:view';
+
+/** 監査ログの1件（誰が・いつ・何を・結果） */
+export interface AuditEvent {
+  ts: number;
+  actorId: string;
+  actorEmail: string;
+  action: string; // 例: session.create / session.approve / auth.login / guardrail.block
+  workspaceId: string | null;
+  target: string | null; // 対象ID等
+  outcome: 'success' | 'denied' | 'error';
+  detail?: string;
+  ip?: string;
+}
 
 export interface User {
   id: string;

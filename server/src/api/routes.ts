@@ -8,10 +8,30 @@ import { resolveWorkspace, requirePerm } from '../auth/middleware.js';
 import { tenancy } from '../tenancy/store.js';
 import { repoStore } from '../tenancy/repos.js';
 import { ROLE_LABEL } from '../auth/rbac.js';
-import type { CreateSessionInput, Role } from '../types.js';
+import { audit } from '../audit/log.js';
+import type { AuditEvent, CreateSessionInput, Role } from '../types.js';
 
 export function createRouter(sessions: SessionManager): Router {
   const router = Router();
+
+  // 監査記録ヘルパ（リクエスト文脈で誰が/どこで を補完）
+  const rec = (
+    req: Request,
+    action: string,
+    outcome: AuditEvent['outcome'],
+    target: string | null,
+    detail?: string
+  ) =>
+    audit.record({
+      actorId: req.identity?.user.id ?? 'anon',
+      actorEmail: req.identity?.user.email ?? 'anon',
+      action,
+      workspaceId: req.workspaceId ?? null,
+      target,
+      outcome,
+      detail,
+      ip: req.ip,
+    });
 
   // ヘルスチェック / 設定
   router.get('/health', (_req, res) => {
@@ -43,6 +63,7 @@ export function createRouter(sessions: SessionManager): Router {
     const { name } = req.body as { name?: string };
     if (!name?.trim()) return res.status(400).json({ error: '案件名は必須です' });
     const ws = tenancy.createWorkspace(name.trim(), req.identity!.user.id);
+    rec(req, 'workspace.create', 'success', ws.id, ws.name);
     res.status(201).json(ws);
   });
 
@@ -65,6 +86,7 @@ export function createRouter(sessions: SessionManager): Router {
     if (!email) return res.status(400).json({ error: 'email は必須です' });
     const user = tenancy.upsertUser({ email, name: name || email, provider: 'invited' });
     tenancy.addMember(req.workspaceId!, user.id, role ?? 'member');
+    rec(req, 'member.add', 'success', user.id, `${email} as ${role ?? 'member'}`);
     res.status(201).json({ ...user, role: role ?? 'member' });
   });
 
@@ -87,8 +109,10 @@ export function createRouter(sessions: SessionManager): Router {
     }
     try {
       const created = await sessions.createBatch(body, req.workspaceId!);
+      rec(req, 'session.create', 'success', created.map((s) => s.id).join(','), body.prompt.slice(0, 80));
       res.status(201).json(created);
     } catch (e) {
+      rec(req, 'session.create', 'error', null, (e as Error).message);
       res.status(402).json({ error: (e as Error).message }); // ② 予算ハードキャップ等
     }
   });
@@ -115,14 +139,18 @@ export function createRouter(sessions: SessionManager): Router {
 
   router.post('/sessions/:id/approve', resolveWorkspace, requirePerm('session:approve'), inWorkspace, async (req, res) => {
     const { message } = req.body as { message?: string };
-    res.json({ ok: await sessions.approve(req.params.id, message ?? 'corral: approved') });
+    const ok = await sessions.approve(req.params.id, message ?? 'corral: approved');
+    rec(req, 'session.approve', ok ? 'success' : 'denied', req.params.id);
+    res.json({ ok });
   });
 
   router.post('/sessions/:id/stop', resolveWorkspace, requirePerm('session:instruct'), inWorkspace, (req, res) => {
+    rec(req, 'session.stop', 'success', req.params.id);
     res.json({ ok: sessions.stop(req.params.id) });
   });
 
   router.delete('/sessions/:id', resolveWorkspace, requirePerm('session:create'), inWorkspace, async (req, res) => {
+    rec(req, 'session.remove', 'success', req.params.id);
     res.json({ ok: await sessions.remove(req.params.id) });
   });
 
@@ -136,6 +164,26 @@ export function createRouter(sessions: SessionManager): Router {
     res.json(
       await notify({ sessionId: 'test', title: '通知テスト', status: 'done', branch: null, demo: config.demo })
     );
+  });
+
+  // 監査ログ（owner/admin のみ）+ SIEM 状態
+  router.get('/audit', resolveWorkspace, requirePerm('audit:view'), (req, res) => {
+    res.json({
+      siemConnected: audit.siemConnected(),
+      events: audit.list({
+        workspaceId: req.identity!.machine ? undefined : req.workspaceId,
+        action: req.query.action?.toString(),
+        limit: Number(req.query.limit ?? 500),
+      }),
+    });
+  });
+
+  // 監査ログのエクスポート（NDJSON）
+  router.get('/audit/export', resolveWorkspace, requirePerm('audit:view'), (req, res) => {
+    const nd = audit.exportNdjson(req.identity!.machine ? undefined : req.workspaceId);
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Content-Disposition', 'attachment; filename="corral-audit.ndjson"');
+    res.send(nd);
   });
 
   // ロール表示ラベル（UI 補助）

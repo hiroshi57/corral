@@ -16,6 +16,7 @@ import { accrueRun, emptyUsage } from '../finops/pricing.js';
 import { notify } from '../notify/notifier.js';
 import { repoStore } from '../tenancy/repos.js';
 import { checkPrompt, scanSecrets, checkChanges } from '../guardrails/policy.js';
+import { audit } from '../audit/log.js';
 import type {
   AgentKind,
   CreateSessionInput,
@@ -140,6 +141,16 @@ export class SessionManager extends EventEmitter {
     session.violations.push(v);
     this.appendLog(session, 'system', `🛡 ガードレール: ${v.detail}${v.blocked ? '（ブロック）' : '（警告）'}`);
     this.emit('event', { type: 'guardrail', sessionId: session.id, violation: v });
+    // 監査ログにも記録（SIEM 連携対象）
+    audit.record({
+      actorId: 'system',
+      actorEmail: 'guardrail',
+      action: `guardrail.${v.kind}`,
+      workspaceId: session.workspaceId,
+      target: session.id,
+      outcome: v.blocked ? 'denied' : 'error',
+      detail: v.detail,
+    });
   }
 
   private repoRootOf(session: Session): string {

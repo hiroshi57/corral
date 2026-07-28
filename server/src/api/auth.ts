@@ -1,9 +1,28 @@
-// ⑤ 認証ルート: dev ログイン / me / logout / Google OIDC(スキャフォールド)
+// ⑤ 認証ルート: dev ログイン / me / logout / Google OIDC / SAML 2.0
 import { Router } from 'express';
+import { SAML } from '@node-saml/node-saml';
 import { config } from '../config.js';
 import { signSession, verifySession } from '../auth/tokens.js';
 import { tenancy, MACHINE_USER } from '../tenancy/store.js';
+import { audit } from '../audit/log.js';
 import type { User } from '../types.js';
+
+// SAML 2.0（設定時のみ）。Okta/Azure AD/OneLogin 等の IdP と連携
+let samlInstance: SAML | null = null;
+function getSaml(): SAML | null {
+  const s = config.auth.saml;
+  if (!s.entryPoint || !s.idpCert || !s.callbackUrl) return null;
+  if (!samlInstance) {
+    samlInstance = new SAML({
+      entryPoint: s.entryPoint,
+      issuer: s.issuer,
+      callbackUrl: s.callbackUrl,
+      idpCert: s.idpCert,
+      wantAssertionsSigned: true,
+    });
+  }
+  return samlInstance;
+}
 
 /** リクエストから現在ユーザーを解決（token/セッション） */
 function currentUser(req: import('express').Request): User | null {
@@ -42,6 +61,7 @@ export function createAuthRouter(): Router {
     res.json({
       devLogin: config.auth.devLogin,
       google: !!config.auth.google.clientId,
+      saml: !!getSaml(),
     });
   });
 
@@ -55,6 +75,7 @@ export function createAuthRouter(): Router {
       name: name || email.split('@')[0],
       provider: 'dev',
     });
+    audit.record({ actorId: user.id, actorEmail: user.email, action: 'auth.login', workspaceId: null, target: 'dev', outcome: 'success', ip: req.ip });
     res.json({ token: issue(user), user });
   });
 
@@ -113,6 +134,41 @@ export function createAuthRouter(): Router {
       res.redirect(`/?session=${encodeURIComponent(issue(user))}`);
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  // --- SAML 2.0（Okta/Azure AD 等・設定時のみ） ---
+  r.get('/sso/saml/metadata', (_req, res) => {
+    const s = getSaml();
+    if (!s) return res.status(501).json({ error: 'SAML 未設定' });
+    res.type('application/xml').send(s.generateServiceProviderMetadata(null, null));
+  });
+
+  r.get('/sso/saml/login', async (_req, res) => {
+    const s = getSaml();
+    if (!s) return res.status(501).json({ error: 'SAML 未設定（CORRAL_SAML_* を設定）' });
+    try {
+      const url = await s.getAuthorizeUrlAsync('', undefined, {});
+      res.redirect(url);
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  r.post('/sso/saml/acs', async (req, res) => {
+    const s = getSaml();
+    if (!s) return res.status(501).json({ error: 'SAML 未設定' });
+    try {
+      const { profile } = await s.validatePostResponseAsync(req.body as Record<string, string>);
+      const p = (profile ?? {}) as Record<string, unknown>;
+      const email = (p.email ?? p.nameID) as string | undefined;
+      if (!email) return res.status(401).json({ error: 'アサーションに email がありません' });
+      const name = (p.displayName ?? p.cn ?? email) as string;
+      const user = tenancy.upsertUser({ email, name, provider: 'saml' });
+      audit.record({ actorId: user.id, actorEmail: user.email, action: 'auth.login', workspaceId: null, target: 'saml', outcome: 'success', ip: req.ip });
+      res.redirect(`/?session=${encodeURIComponent(issue(user))}`);
+    } catch (e) {
+      res.status(401).json({ error: `SAML 検証失敗: ${(e as Error).message}` });
     }
   });
 
