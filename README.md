@@ -96,9 +96,11 @@ corral/
 
 ---
 
-## 外販化プラン
+## 外販化プラン / エンタープライズ
 
-SaaS 化に向けた追加機能30提案・ロードマップ・価格プラン案は [docs/productization.md](docs/productization.md) を参照。
+- SaaS 化の追加機能30提案・ロードマップ・価格プラン: [docs/productization.md](docs/productization.md)
+- **エンタープライズ導入（自己ホスト/VPC・隔離実行・ガードレール・SSO/RBAC）**: [docs/enterprise-deploy.md](docs/enterprise-deploy.md)
+- 自己ホストは `docker compose up -d --build`（[Dockerfile](Dockerfile) / [docker-compose.yml](docker-compose.yml)）
 
 ## ロードマップ（将来）
 

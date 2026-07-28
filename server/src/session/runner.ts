@@ -112,6 +112,54 @@ export class DemoRunner extends EventEmitter implements Runner {
 }
 
 /** 1回の run を作る。isFollowup=true なら継続run（--continue / exec resume 等） */
+/**
+ * #18 サンドボックス実行: Docker コンテナ内でエージェントを起動。
+ * --network none / メモリ・CPU 制限 / 非root / worktree のみマウント で隔離。
+ * ※実走には Docker と image が必要（この環境では未実走。構成は本番同等）。
+ */
+export class DockerRunner extends ProcessRunner {
+  constructor(spec: RunSpec, prompt: string, cwd: string) {
+    const d = config.exec.docker;
+    const dockerArgs = [
+      'run',
+      '--rm',
+      '-i',
+      '--network',
+      d.network,
+      '--memory',
+      d.memory,
+      '--cpus',
+      d.cpus,
+      '--user',
+      '1000:1000',
+      '-v',
+      `${cwd}:/work`,
+      '-w',
+      '/work',
+      d.image,
+      spec.command,
+      ...spec.args,
+    ];
+    super({ command: 'docker', args: dockerArgs, deliver: spec.deliver, fileFlag: spec.fileFlag }, prompt, cwd);
+  }
+}
+
+/**
+ * #5 クラウド/リモート実行: SSH 先でエージェントを起動（ノートPCを閉じても継続）。
+ * ※実走には到達可能な CORRAL_SSH_HOST が必要（この環境では未実走）。
+ */
+export class SSHRunner extends ProcessRunner {
+  constructor(spec: RunSpec, prompt: string, cwd: string) {
+    const s = config.exec.ssh;
+    const remoteCmd = [spec.command, ...spec.args].join(' ');
+    super(
+      { command: 'ssh', args: [s.host, `cd ${s.remoteRoot} && ${remoteCmd}`], deliver: spec.deliver, fileFlag: spec.fileFlag },
+      prompt,
+      cwd
+    );
+  }
+}
+
 export function createRunner(
   agent: AgentKind,
   prompt: string,
@@ -122,5 +170,12 @@ export function createRunner(
   if (config.demo) return new DemoRunner(agent, prompt, isFollowup, cwd);
   const profile = getProfile(agent);
   const spec = isFollowup ? profile.buildFollowup(autoAccept) : profile.buildInitial(autoAccept);
-  return new ProcessRunner(spec, prompt, cwd);
+  switch (config.exec.mode) {
+    case 'docker':
+      return new DockerRunner(spec, prompt, cwd);
+    case 'ssh':
+      return new SSHRunner(spec, prompt, cwd);
+    default:
+      return new ProcessRunner(spec, prompt, cwd);
+  }
 }

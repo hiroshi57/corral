@@ -22,6 +22,11 @@ export function WorkerCard({
       <div className="flex items-center gap-2 mb-1">
         <span className={`w-2 h-2 rounded-full ${meta.dot}`} />
         <span className={`text-xs font-medium ${meta.color}`}>{meta.label}</span>
+        {session.violations?.length > 0 && (
+          <span className="text-[10px] text-rose-300" title="ガードレール違反あり">
+            🛡{session.violations.length}
+          </span>
+        )}
         <span className="ml-auto text-[10px] text-slate-500">
           {AGENT_LABEL[session.agent]}
         </span>

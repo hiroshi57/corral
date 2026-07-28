@@ -7,13 +7,26 @@
 import type {
   AgentKind,
   FinopsSummary,
+  GuardrailViolation,
   LogLine,
+  Repo,
   ServerEvent,
   SessionStatus,
   SessionSummary,
   Usage,
 } from './types';
 import type { Role, User, WorkspaceInfo } from './auth';
+
+// #20 デモ用ガードレール（サーバの denyCommands と同等の代表例）
+const DENY = [/rm\s+-rf\s+\//i, /git\s+push\s+--force/i, /DROP\s+TABLE/i, /curl\s+[^|]*\|\s*(ba)?sh/i];
+function demoCheckPrompt(text: string): GuardrailViolation[] {
+  return DENY.filter((re) => re.test(text)).map((re) => ({
+    ts: Date.now(),
+    kind: 'deny-command' as const,
+    detail: `禁止コマンド検出: ${re.source}`,
+    blocked: true,
+  }));
+}
 
 interface DemoSession extends SessionSummary {
   turns: string[];
@@ -53,6 +66,15 @@ class DemoBackend {
   private workspaces: Array<{ id: string; name: string; createdAt: number; ownerId: string }> = [
     { id: 'default', name: 'サンプル案件', createdAt: Date.now(), ownerId: 'demo' },
   ];
+  // #4 マルチリポ（案件が複数リポを持つ例）
+  private repos: Repo[] = [
+    { id: 'r-web', name: 'web', path: '/demo/web', workspaceId: 'default' },
+    { id: 'r-api', name: 'api', path: '/demo/api', workspaceId: 'default' },
+  ];
+
+  listRepos(workspaceId: string): Repo[] {
+    return this.repos.filter((r) => r.workspaceId === workspaceId);
+  }
   // ⑤ デモユーザー＆ロール（UI でロール切替して RBAC を体験できる）
   private user: User = { id: 'demo', email: 'demo@corral', name: 'デモユーザー', provider: 'demo' };
   private role: Role = 'owner';
@@ -80,6 +102,7 @@ class DemoBackend {
   createWorkspace(name: string): WorkspaceInfo {
     const ws = { id: id8(), name, createdAt: Date.now(), ownerId: this.user.id };
     this.workspaces.push(ws);
+    this.repos.push({ id: id8(), name: 'main', path: `/demo/${ws.id}`, workspaceId: ws.id });
     return { ...ws, role: 'owner' };
   }
 
@@ -111,6 +134,7 @@ class DemoBackend {
       count?: number;
       autoAccept?: boolean;
       title?: string;
+      repoId?: string;
     },
     workspaceId = 'default'
   ): SessionSummary[] {
@@ -129,6 +153,8 @@ class DemoBackend {
         prompt: input.prompt,
         status: 'queued',
         workspaceId,
+        repoId: input.repoId ?? this.repos.find((r) => r.workspaceId === workspaceId)?.id ?? null,
+        violations: [],
         worktreePath: `/(demo)/.corral/worktrees/${id}`,
         branch: `corral/${id}`,
         autoAccept: input.autoAccept ?? false,
@@ -147,11 +173,27 @@ class DemoBackend {
       };
       this.sessions.set(id, s);
       this.update(s);
-      this.log(s, 'system', `worktree を作成: ${s.branch}`);
+      // #20 ガードレール: 危険プロンプトは起動前にブロック
+      const violations = demoCheckPrompt(input.prompt);
+      if (violations.length) {
+        violations.forEach((v) => this.addViolation(s, v));
+        this.log(s, 'system', 'ガードレールによりタスクを起動しませんでした');
+        this.setStatus(s, 'error');
+        created.push(toSummary(s));
+        continue;
+      }
+      const repoName = this.repos.find((r) => r.id === s.repoId)?.name ?? 'default';
+      this.log(s, 'system', `worktree を作成: ${s.branch}（repo: ${repoName}）`);
       this.run(s, input.prompt, false);
       created.push(toSummary(s));
     }
     return created;
+  }
+
+  private addViolation(s: DemoSession, v: GuardrailViolation): void {
+    s.violations.push(v);
+    this.log(s, 'system', `🛡 ガードレール: ${v.detail}${v.blocked ? '（ブロック）' : '（警告）'}`);
+    this.emit({ type: 'guardrail', sessionId: s.id, violation: v });
   }
 
   instruct(id: string, text: string): { ok: boolean } {

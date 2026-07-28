@@ -65,6 +65,41 @@ export const config = {
     },
   },
 
+  // --- #20 ポリシーガードレール ---
+  guardrails: {
+    enabled: process.env.CORRAL_GUARDRAILS !== '0',
+    /** 実行を禁止するコマンド/文字列（正規表現、カンマ区切り） */
+    denyCommands: (process.env.CORRAL_DENY_COMMANDS ??
+      'rm\\s+-rf\\s+/,git\\s+push\\s+--force,DROP\\s+TABLE,curl\\s+[^|]*\\|\\s*(ba)?sh')
+      .split(',')
+      .filter(Boolean),
+    /** 変更禁止パス（glob 断片、カンマ区切り） */
+    protectedPaths: (process.env.CORRAL_PROTECTED_PATHS ?? '.env,.git/,secrets/,id_rsa,*.pem')
+      .split(',')
+      .filter(Boolean),
+    /** 承認をブロックする最大変更ファイル数（超過で要手動確認） */
+    maxChangedFiles: Number(process.env.CORRAL_MAX_CHANGED_FILES ?? 200),
+  },
+
+  // --- #5 / #18 実行モード（ローカル / Docker サンドボックス / SSH リモート） ---
+  exec: {
+    /** local | docker | ssh */
+    mode: (process.env.CORRAL_EXEC_MODE ?? 'local') as 'local' | 'docker' | 'ssh',
+    docker: {
+      image: process.env.CORRAL_DOCKER_IMAGE ?? 'corral/agent:latest',
+      /** ネットワーク（none で遮断＝サンドボックス強度UP） */
+      network: process.env.CORRAL_DOCKER_NETWORK ?? 'none',
+      memory: process.env.CORRAL_DOCKER_MEMORY ?? '2g',
+      cpus: process.env.CORRAL_DOCKER_CPUS ?? '2',
+    },
+    ssh: {
+      /** user@host */
+      host: process.env.CORRAL_SSH_HOST ?? '',
+      /** リモート側の作業ルート */
+      remoteRoot: process.env.CORRAL_SSH_REMOTE_ROOT ?? '~/corral-work',
+    },
+  },
+
   // --- ② FinOps（コスト計測） ---
   finops: {
     /** 予算（USD, 累計）。0 = 無制限 */

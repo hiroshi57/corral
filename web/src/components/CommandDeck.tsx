@@ -1,6 +1,6 @@
 // 司令塔ペイン：新規タスク投入 + 一斉指示(broadcast)
-import { useState } from 'react';
-import type { AgentKind } from '../lib/types';
+import { useEffect, useState } from 'react';
+import type { AgentKind, Repo } from '../lib/types';
 import { AGENT_LABEL } from '../lib/types';
 import { api } from '../lib/api';
 
@@ -8,10 +8,12 @@ const AGENTS: AgentKind[] = ['claude', 'codex', 'gemini', 'aider'];
 
 export function CommandDeck({
   onChanged,
+  repos = [],
   canCreate = true,
   canInstruct = true,
 }: {
   onChanged: () => void;
+  repos?: Repo[];
   canCreate?: boolean;
   canInstruct?: boolean;
 }) {
@@ -19,6 +21,11 @@ export function CommandDeck({
   const [prompt, setPrompt] = useState('');
   const [count, setCount] = useState(1);
   const [autoAccept, setAutoAccept] = useState(false);
+  const [repoId, setRepoId] = useState<string>('');
+
+  useEffect(() => {
+    if (repos.length && !repos.find((r) => r.id === repoId)) setRepoId(repos[0].id);
+  }, [repos]); // eslint-disable-line react-hooks/exhaustive-deps
   const [broadcastText, setBroadcastText] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -32,7 +39,13 @@ export function CommandDeck({
     if (!prompt.trim()) return;
     setBusy(true);
     try {
-      const created = await api.createSessions({ agent, prompt, count, autoAccept });
+      const created = await api.createSessions({
+        agent,
+        prompt,
+        count,
+        autoAccept,
+        repoId: repoId || undefined,
+      });
       setPrompt('');
       flash(`${created.length} 体のワーカーを起動しました`);
       onChanged();
@@ -87,6 +100,20 @@ export function CommandDeck({
               </option>
             ))}
           </select>
+          {repos.length > 0 && (
+            <select
+              value={repoId}
+              onChange={(e) => setRepoId(e.target.value)}
+              className="bg-panel border border-edge rounded-lg px-2 py-1 text-sm"
+              title="対象リポジトリ（マルチリポ）"
+            >
+              {repos.map((r) => (
+                <option key={r.id} value={r.id}>
+                  📁 {r.name}
+                </option>
+              ))}
+            </select>
+          )}
           <label className="text-xs text-slate-400 flex items-center gap-1">
             台数
             <input

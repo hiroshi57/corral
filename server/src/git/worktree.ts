@@ -12,9 +12,9 @@ async function git(args: string[], cwd = config.repoRoot): Promise<string> {
   return stdout;
 }
 
-export async function isGitRepo(): Promise<boolean> {
+export async function isGitRepo(repoRoot = config.repoRoot): Promise<boolean> {
   try {
-    await git(['rev-parse', '--is-inside-work-tree']);
+    await git(['rev-parse', '--is-inside-work-tree'], repoRoot);
     return true;
   } catch {
     return false;
@@ -22,33 +22,39 @@ export async function isGitRepo(): Promise<boolean> {
 }
 
 /** git worktree を使うべきか（本番かつ対象が git リポジトリ） */
-async function useGit(): Promise<boolean> {
-  return !config.demo && (await isGitRepo());
+async function useGit(repoRoot = config.repoRoot): Promise<boolean> {
+  return !config.demo && (await isGitRepo(repoRoot));
 }
 
+/** #4 マルチリポ: 対象リポジトリ(repoRoot)から worktree を作る */
 export async function createWorktree(
-  sessionId: string
+  sessionId: string,
+  repoRoot: string = config.repoRoot
 ): Promise<{ worktreePath: string; branch: string }> {
   const branch = `corral/${sessionId}`;
   const worktreePath = path.join(config.worktreeBase, sessionId);
   await fs.mkdir(config.worktreeBase, { recursive: true });
 
-  if (!(await useGit())) {
+  if (!(await useGit(repoRoot))) {
     await fs.mkdir(worktreePath, { recursive: true });
     return { worktreePath, branch };
   }
 
-  await git(['worktree', 'add', '-b', branch, worktreePath, 'HEAD']);
+  await git(['worktree', 'add', '-b', branch, worktreePath, 'HEAD'], repoRoot);
   return { worktreePath, branch };
 }
 
-export async function removeWorktree(worktreePath: string, branch: string | null): Promise<void> {
-  if (!(await useGit())) {
+export async function removeWorktree(
+  worktreePath: string,
+  branch: string | null,
+  repoRoot: string = config.repoRoot
+): Promise<void> {
+  if (!(await useGit(repoRoot))) {
     await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => {});
     return;
   }
-  await git(['worktree', 'remove', worktreePath, '--force']).catch(() => {});
-  if (branch) await git(['branch', '-D', branch]).catch(() => {});
+  await git(['worktree', 'remove', worktreePath, '--force'], repoRoot).catch(() => {});
+  if (branch) await git(['branch', '-D', branch], repoRoot).catch(() => {});
 }
 
 /** 作業ツリー配下のファイル一覧（非git時に使用。.corral は除外） */
@@ -69,9 +75,23 @@ async function listFiles(dir: string, base = dir): Promise<string[]> {
   return out;
 }
 
+/** 変更されたファイルの相対パス一覧（ガードレール用） */
+export async function changedFilePaths(worktreePath: string): Promise<string[]> {
+  if (!(await useGit(worktreePath))) return listFiles(worktreePath);
+  try {
+    const out = await git(['status', '--porcelain'], worktreePath);
+    return out
+      .split('\n')
+      .map((l) => l.slice(3).trim())
+      .filter((l) => l.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 /** 変更ファイル数 */
 export async function countChanges(worktreePath: string): Promise<number> {
-  if (!(await useGit())) return (await listFiles(worktreePath)).length;
+  if (!(await useGit(worktreePath))) return (await listFiles(worktreePath)).length;
   try {
     const out = await git(['status', '--porcelain'], worktreePath);
     return out.split('\n').filter((l) => l.trim().length > 0).length;
@@ -82,7 +102,7 @@ export async function countChanges(worktreePath: string): Promise<number> {
 
 /** diff テキスト（レビュー画面用）。非git時はファイル内容を疑似 diff として返す */
 export async function getDiff(worktreePath: string): Promise<string> {
-  if (!(await useGit())) {
+  if (!(await useGit(worktreePath))) {
     const files = await listFiles(worktreePath);
     if (files.length === 0) return '変更はありません';
     const parts: string[] = [];
@@ -111,7 +131,7 @@ export async function checkpoint(
   message: string
 ): Promise<{ committed: boolean; count: number }> {
   const count = await countChanges(worktreePath);
-  if (!(await useGit())) return { committed: count > 0, count };
+  if (!(await useGit(worktreePath))) return { committed: count > 0, count };
   await git(['add', '-A'], worktreePath);
   try {
     await git(['commit', '-m', message], worktreePath);

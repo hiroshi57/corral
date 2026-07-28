@@ -22,6 +22,20 @@ export interface Usage {
   runs: number;
 }
 
+export interface Repo {
+  id: string;
+  name: string;
+  path: string;
+  workspaceId: string;
+}
+
+export interface GuardrailViolation {
+  ts: number;
+  kind: 'deny-command' | 'protected-path' | 'secret-leak' | 'too-many-changes';
+  detail: string;
+  blocked: boolean;
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -29,6 +43,8 @@ export interface SessionSummary {
   prompt: string;
   status: SessionStatus;
   workspaceId: string;
+  repoId: string | null;
+  violations: GuardrailViolation[];
   worktreePath: string | null;
   branch: string | null;
   autoAccept: boolean;
@@ -58,7 +74,8 @@ export type ServerEvent =
   | { type: 'session:removed'; id: string }
   | { type: 'log'; id: string; line: LogLine }
   | { type: 'notify'; event: NotifyEvent }
-  | { type: 'budget'; level: 'alert' | 'exceeded'; totalUsd: number; budgetUsd: number };
+  | { type: 'budget'; level: 'alert' | 'exceeded'; totalUsd: number; budgetUsd: number }
+  | { type: 'guardrail'; sessionId: string; violation: GuardrailViolation };
 
 export interface FinopsSummary {
   totalUsd: number;

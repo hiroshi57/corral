@@ -6,6 +6,7 @@ import {
   createWorktree,
   removeWorktree,
   countChanges,
+  changedFilePaths,
   getDiff,
   checkpoint,
 } from '../git/worktree.js';
@@ -13,9 +14,12 @@ import { createRunner, type Runner } from './runner.js';
 import { getProfile } from '../agents/registry.js';
 import { accrueRun, emptyUsage } from '../finops/pricing.js';
 import { notify } from '../notify/notifier.js';
+import { repoStore } from '../tenancy/repos.js';
+import { checkPrompt, scanSecrets, checkChanges } from '../guardrails/policy.js';
 import type {
   AgentKind,
   CreateSessionInput,
+  GuardrailViolation,
   LogLine,
   Session,
   SessionStatus,
@@ -87,6 +91,8 @@ export class SessionManager extends EventEmitter {
       prompt: input.prompt,
       status: 'queued',
       workspaceId,
+      repoId: input.repoId ?? null,
+      violations: [],
       worktreePath: null,
       branch: null,
       autoAccept: input.autoAccept ?? false,
@@ -104,17 +110,41 @@ export class SessionManager extends EventEmitter {
     this.sessions.set(id, session);
     this.emitUpdate(session);
 
+    // #20 ガードレール: 起動前にプロンプトを検査（禁止コマンド等はブロック）
+    const promptViolations = checkPrompt(input.prompt);
+    if (promptViolations.some((v) => v.blocked)) {
+      promptViolations.forEach((v) => this.recordViolation(session, v));
+      this.appendLog(session, 'system', 'ガードレールによりタスクを起動しませんでした');
+      this.setStatus(session, 'error');
+      return toSummary(session);
+    }
+
+    // #4 マルチリポ: 対象リポジトリを解決
+    const repo = input.repoId ? repoStore.get(input.repoId) : undefined;
+    const repoRoot = repo?.path ?? config.repoRoot;
     try {
-      const { worktreePath, branch } = await createWorktree(id);
+      const { worktreePath, branch } = await createWorktree(id, repoRoot);
       session.worktreePath = worktreePath;
       session.branch = branch;
-      this.appendLog(session, 'system', `worktree を作成: ${branch}`);
+      this.appendLog(session, 'system', `worktree を作成: ${branch}（repo: ${repo?.name ?? 'default'}）`);
       this.startRun(session, session.prompt, false);
     } catch (err) {
       this.appendLog(session, 'system', `worktree 作成に失敗: ${(err as Error).message}`);
       this.setStatus(session, 'error');
     }
     return toSummary(session);
+  }
+
+  /** #20 違反を記録して UI へ通知 */
+  private recordViolation(session: Session, v: GuardrailViolation): void {
+    session.violations.push(v);
+    this.appendLog(session, 'system', `🛡 ガードレール: ${v.detail}${v.blocked ? '（ブロック）' : '（警告）'}`);
+    this.emit('event', { type: 'guardrail', sessionId: session.id, violation: v });
+  }
+
+  private repoRootOf(session: Session): string {
+    const repo = session.repoId ? repoStore.get(session.repoId) : undefined;
+    return repo?.path ?? config.repoRoot;
   }
 
   /**
@@ -137,7 +167,10 @@ export class SessionManager extends EventEmitter {
 
     runner.on('output', (stream, chunk) => {
       this.runOutChars.set(session.id, (this.runOutChars.get(session.id) ?? 0) + chunk.length);
-      for (const line of chunk.split(/\r?\n/)) {
+      // #20 出力の機密スキャン（検出→記録＆ログはマスキング）
+      const { violations, redacted } = scanSecrets(chunk);
+      violations.forEach((v) => this.recordViolation(session, v));
+      for (const line of redacted.split(/\r?\n/)) {
         if (line.length > 0) this.appendLog(session, stream, line);
       }
     });
@@ -199,6 +232,14 @@ export class SessionManager extends EventEmitter {
   instruct(id: string, text: string): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
+
+    // #20 追加指示もガードレール検査（禁止コマンドはブロック）
+    const violations = checkPrompt(text);
+    if (violations.some((v) => v.blocked)) {
+      violations.forEach((v) => this.recordViolation(session, v));
+      return false;
+    }
+
     session.turns.push(text);
     session.interventions += 1; // ③ 人手介入としてカウント
 
@@ -221,10 +262,20 @@ export class SessionManager extends EventEmitter {
     return n;
   }
 
-  /** 承認 = commit して完了 */
+  /** 承認 = commit して完了。#20 保護パス/大量変更はブロック */
   async approve(id: string, message: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session?.worktreePath) return false;
+
+    // #20 ガードレール: 変更内容を承認前に検査
+    const files = await changedFilePaths(session.worktreePath);
+    const changeViolations = checkChanges(files, session.changedFiles);
+    if (changeViolations.some((v) => v.blocked)) {
+      changeViolations.forEach((v) => this.recordViolation(session, v));
+      this.appendLog(session, 'system', '承認をブロックしました（ガードレール違反）。手動確認が必要です。');
+      return false;
+    }
+
     const { committed, count } = await checkpoint(session.worktreePath, message);
     this.appendLog(
       session,
@@ -254,7 +305,8 @@ export class SessionManager extends EventEmitter {
     if (!session) return false;
     this.runners.get(id)?.stop();
     this.runners.delete(id);
-    if (session.worktreePath) await removeWorktree(session.worktreePath, session.branch);
+    if (session.worktreePath)
+      await removeWorktree(session.worktreePath, session.branch, this.repoRootOf(session));
     this.sessions.delete(id);
     this.emit('event', { type: 'session:removed', id });
     return true;

@@ -11,7 +11,7 @@ import { api } from './lib/api';
 import { connectWs } from './lib/ws';
 import { can, store, ROLE_LABEL, type Role, type User, type WorkspaceInfo } from './lib/auth';
 import { demoBackend, IS_DEMO } from './lib/demo';
-import type { LogLine, NotifyEvent, SessionStatus, SessionSummary } from './lib/types';
+import type { LogLine, NotifyEvent, Repo, SessionStatus, SessionSummary } from './lib/types';
 import { STATUS_META } from './lib/types';
 
 const STATUS_ORDER: SessionStatus[] = ['needs_review', 'running', 'queued', 'error', 'done', 'stopped'];
@@ -28,6 +28,9 @@ export default function App() {
   const [notifications, setNotifications] = useState<NotifyEvent[]>([]);
   const [channels, setChannels] = useState<string[]>([]);
   const [budget, setBudget] = useState<BudgetBanner | null>(null);
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [execMode, setExecMode] = useState('local');
+  const [guardrailsOn, setGuardrailsOn] = useState(false);
 
   // ⑤/④ 認証・案件
   const [authReady, setAuthReady] = useState(false);
@@ -74,8 +77,13 @@ export default function App() {
       store.setSession(s);
       history.replaceState({}, '', location.pathname);
     }
-    api.health().then((h) => { setDemo(h.demo); setChannels(h.notifyChannels ?? []); }).catch(() => {});
-    initAuth();
+    api.health().then((h) => {
+      setDemo(h.demo);
+      setChannels(h.notifyChannels ?? []);
+      setExecMode(h.execMode ?? 'local');
+      setGuardrailsOn(!!h.guardrails);
+    }).catch(() => {});
+    initAuth().then(loadRepos);
     const disconnect = connectWs((e) => {
       switch (e.type) {
         case 'snapshot':
@@ -96,6 +104,19 @@ export default function App() {
           break;
         case 'budget':
           setBudget({ level: e.level, totalUsd: e.totalUsd, budgetUsd: e.budgetUsd });
+          break;
+        case 'guardrail':
+          setNotifications((prev) => [
+            ...prev,
+            {
+              ts: e.violation.ts,
+              sessionId: e.sessionId,
+              title: `🛡 ${e.violation.detail}`,
+              status: 'error' as SessionStatus,
+              channels: ['app'],
+              message: e.violation.detail,
+            },
+          ].slice(-100));
           break;
       }
     });
@@ -138,12 +159,15 @@ export default function App() {
       })
     );
 
+  const loadRepos = () => api.listRepos().then(setRepos).catch(() => setRepos([]));
+
   // 案件切替
   const switchWs = (id: string) => {
     store.setWorkspace(id);
     setCurrentWs(id);
     setSelected(null);
     refresh();
+    loadRepos();
   };
   const createWs = async (name: string) => {
     const ws = await api.createWorkspace(name);
@@ -200,6 +224,17 @@ export default function App() {
             DEMO
           </span>
         )}
+        <span
+          className="rounded border border-edge bg-panel2 px-2 py-0.5 text-[10px] text-slate-400"
+          title="実行モード（local / docker=サンドボックス / ssh=リモート）"
+        >
+          {execMode === 'docker' ? '📦 docker' : execMode === 'ssh' ? '🌐 ssh' : '💻 local'}
+        </span>
+        {guardrailsOn && (
+          <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300" title="ポリシーガードレール 有効">
+            🛡 ガードレール
+          </span>
+        )}
         <WorkspaceBar
           workspaces={workspaces}
           currentWs={currentWs}
@@ -252,7 +287,7 @@ export default function App() {
       ) : (
         <div className="flex min-h-0 flex-1">
           <div className="flex w-[420px] shrink-0 flex-col gap-3 overflow-auto border-r border-edge p-4">
-            <CommandDeck onChanged={refresh} canCreate={canCreate} canInstruct={canInstruct} />
+            <CommandDeck onChanged={refresh} repos={repos} canCreate={canCreate} canInstruct={canInstruct} />
             {!canCreate && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
                 現在のロール（{ROLE_LABEL[role]}）ではタスク起動・指示ができません。閲覧のみ可能です。

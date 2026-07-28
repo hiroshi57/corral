@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { configuredChannels, notify } from '../notify/notifier.js';
 import { resolveWorkspace, requirePerm } from '../auth/middleware.js';
 import { tenancy } from '../tenancy/store.js';
+import { repoStore } from '../tenancy/repos.js';
 import { ROLE_LABEL } from '../auth/rbac.js';
 import type { CreateSessionInput, Role } from '../types.js';
 
@@ -20,6 +21,8 @@ export function createRouter(sessions: SessionManager): Router {
       repoRoot: config.repoRoot,
       notifyChannels: configuredChannels(),
       budgetUsd: config.finops.budgetUsd,
+      execMode: config.exec.mode,
+      guardrails: config.guardrails.enabled,
     });
   });
 
@@ -41,6 +44,16 @@ export function createRouter(sessions: SessionManager): Router {
     if (!name?.trim()) return res.status(400).json({ error: '案件名は必須です' });
     const ws = tenancy.createWorkspace(name.trim(), req.identity!.user.id);
     res.status(201).json(ws);
+  });
+
+  // #4 マルチリポ: 案件のリポジトリ一覧 / 追加
+  router.get('/repos', resolveWorkspace, requirePerm('session:view'), (req, res) => {
+    res.json(repoStore.listForWorkspace(req.workspaceId!));
+  });
+  router.post('/repos', resolveWorkspace, requirePerm('workspace:manage'), (req, res) => {
+    const { name, path } = req.body as { name?: string; path?: string };
+    if (!name?.trim() || !path?.trim()) return res.status(400).json({ error: 'name と path は必須です' });
+    res.status(201).json(repoStore.create(req.workspaceId!, name.trim(), path.trim()));
   });
 
   // メンバー一覧 / 追加（⑤ member:manage 権限）

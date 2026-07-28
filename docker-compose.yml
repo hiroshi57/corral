@@ -1,0 +1,36 @@
+# Corral 自己ホスト（#19 オンプレ/VPC・データ主権）
+# 社内ネットワーク内で完結。外部SaaSに依存しない。
+services:
+  corral:
+    build: .
+    image: corral/daemon:latest
+    ports:
+      - '127.0.0.1:4319:4319' # 既定はループバックのみ公開（社内公開時は 0.0.0.0 に）
+    environment:
+      CORRAL_DEMO: '0'
+      CORRAL_HOST: '0.0.0.0'
+      CORRAL_TOKEN: '${CORRAL_TOKEN:?トークンを .env で設定してください}'
+      # 対象リポジトリ（コンテナ内パス）。ボリュームでマウント
+      CORRAL_REPO: '/repos/main'
+      # 実行モード: local | docker(サンドボックス) | ssh(リモート)
+      CORRAL_EXEC_MODE: '${CORRAL_EXEC_MODE:-local}'
+      # ガードレール（既定ON）
+      CORRAL_GUARDRAILS: '1'
+      CORRAL_PROTECTED_PATHS: '.env,.git/,secrets/,id_rsa,*.pem'
+      # 予算（FinOps）
+      CORRAL_BUDGET_USD: '${CORRAL_BUDGET_USD:-0}'
+      # 通知（任意）
+      CORRAL_CHATWORK_TOKEN: '${CORRAL_CHATWORK_TOKEN:-}'
+      CORRAL_CHATWORK_ROOM: '${CORRAL_CHATWORK_ROOM:-}'
+      CORRAL_SLACK_WEBHOOK: '${CORRAL_SLACK_WEBHOOK:-}'
+      # SSO（任意・エンプラ）
+      CORRAL_GOOGLE_CLIENT_ID: '${CORRAL_GOOGLE_CLIENT_ID:-}'
+      CORRAL_GOOGLE_CLIENT_SECRET: '${CORRAL_GOOGLE_CLIENT_SECRET:-}'
+      CORRAL_GOOGLE_REDIRECT: '${CORRAL_GOOGLE_REDIRECT:-}'
+    volumes:
+      - ./repos:/repos # 対象リポジトリ群（マルチリポ）
+      - corral-work:/app/.corral/worktrees # worktree の作業領域
+    restart: unless-stopped
+
+volumes:
+  corral-work:

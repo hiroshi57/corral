@@ -1,5 +1,5 @@
 // REST API クライアント（デモモード時はブラウザ内バックエンドへ委譲）
-import type { AgentKind, FinopsSummary, LogLine, NotifyEvent, SessionSummary } from './types';
+import type { AgentKind, FinopsSummary, LogLine, NotifyEvent, Repo, SessionSummary } from './types';
 import { demoBackend, IS_DEMO } from './demo';
 import { store, type User, type WorkspaceInfo } from './auth';
 
@@ -30,6 +30,8 @@ export const api = {
           repoRoot: '(browser demo)',
           notifyChannels: [] as string[],
           budgetUsd: 0,
+          execMode: 'local',
+          guardrails: true,
         })
       : req<{
           ok: boolean;
@@ -37,6 +39,8 @@ export const api = {
           repoRoot: string;
           notifyChannels?: string[];
           budgetUsd?: number;
+          execMode?: string;
+          guardrails?: boolean;
         }>('/health'),
 
   listSessions: () =>
@@ -55,6 +59,7 @@ export const api = {
     count?: number;
     autoAccept?: boolean;
     title?: string;
+    repoId?: string;
   }) =>
     IS_DEMO
       ? Promise.resolve(demoBackend.createSessions(input, store.getWorkspace()))
@@ -140,4 +145,8 @@ export const api = {
     IS_DEMO
       ? Promise.resolve(demoBackend.createWorkspace(name))
       : req<WorkspaceInfo>('/workspaces', { method: 'POST', body: JSON.stringify({ name }) }),
+
+  // #4 マルチリポ
+  listRepos: () =>
+    IS_DEMO ? Promise.resolve(demoBackend.listRepos(store.getWorkspace())) : req<Repo[]>('/repos'),
 };

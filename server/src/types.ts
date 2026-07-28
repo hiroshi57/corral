@@ -56,6 +56,23 @@ export interface Identity {
   machine: boolean;
 }
 
+/** #4 マルチリポ: 案件が抱える対象リポジトリ */
+export interface Repo {
+  id: string;
+  name: string;
+  path: string;
+  workspaceId: string;
+}
+
+/** #20 ガードレール違反 */
+export interface GuardrailViolation {
+  ts: number;
+  kind: 'deny-command' | 'protected-path' | 'secret-leak' | 'too-many-changes';
+  detail: string;
+  /** 実行/承認をブロックしたか（警告のみなら false） */
+  blocked: boolean;
+}
+
 /** ② FinOps: 1セッションのトークン/コスト消費 */
 export interface Usage {
   inputTokens: number;
@@ -95,6 +112,10 @@ export interface Session {
   worktreePath: string | null;
   /** ④ 所属ワークスペース（案件）ID */
   workspaceId: string;
+  /** #4 対象リポジトリID */
+  repoId: string | null;
+  /** #20 ガードレール違反の履歴 */
+  violations: GuardrailViolation[];
   /** 作業ブランチ名 */
   branch: string | null;
   /** auto-accept（確認を自動承認） */
@@ -131,7 +152,8 @@ export type ServerEvent =
   | { type: 'session:removed'; id: string }
   | { type: 'log'; id: string; line: LogLine }
   | { type: 'notify'; event: NotifyEvent }
-  | { type: 'budget'; level: 'alert' | 'exceeded'; totalUsd: number; budgetUsd: number };
+  | { type: 'budget'; level: 'alert' | 'exceeded'; totalUsd: number; budgetUsd: number }
+  | { type: 'guardrail'; sessionId: string; violation: GuardrailViolation };
 
 /** セッション作成リクエスト */
 export interface CreateSessionInput {
@@ -141,4 +163,6 @@ export interface CreateSessionInput {
   /** 台数（uzi の claude:3 に相当） */
   count?: number;
   autoAccept?: boolean;
+  /** #4 対象リポジトリID */
+  repoId?: string;
 }
