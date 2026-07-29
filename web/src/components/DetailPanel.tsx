@@ -28,11 +28,25 @@ export function DetailPanel({
   const [instruction, setInstruction] = useState('');
   // #6 インラインコメント（diff の行に指摘を付けて差し戻し）
   const [comments, setComments] = useState<Array<{ target: string; note: string }>>([]);
+  // #24 セッションリプレイ
+  const [replaying, setReplaying] = useState(false);
+  const [replayCount, setReplayCount] = useState(0);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+  }, [logs, replayCount]);
+
+  // #24 リプレイ: ログを時系列で少しずつ再生
+  useEffect(() => {
+    if (!replaying) return;
+    if (replayCount >= logs.length) {
+      setReplaying(false);
+      return;
+    }
+    const t = setTimeout(() => setReplayCount((c) => c + 1), 250);
+    return () => clearTimeout(t);
+  }, [replaying, replayCount, logs.length]);
 
   useEffect(() => {
     if (session && tab === 'diff') {
@@ -84,6 +98,22 @@ export function DetailPanel({
           {AGENT_LABEL[session.agent]} · {session.branch}
         </span>
         <div className="ml-auto flex gap-1">
+          {tab === 'log' && logs.length > 0 && (
+            <button
+              onClick={() => {
+                if (replaying) {
+                  setReplaying(false);
+                } else {
+                  setReplayCount(0);
+                  setReplaying(true);
+                }
+              }}
+              className="rounded px-2 py-1 text-xs text-slate-400 hover:bg-edge"
+              title="セッションを時系列で再生"
+            >
+              {replaying ? '⏹ 停止' : '▶ リプレイ'}
+            </button>
+          )}
           <button
             onClick={() => setTab('log')}
             className={`text-xs px-2 py-1 rounded ${tab === 'log' ? 'bg-edge' : 'text-slate-400'}`}
@@ -104,7 +134,12 @@ export function DetailPanel({
         {tab === 'log' ? (
           <>
             {logs.length === 0 && <div className="text-slate-600">出力待ち...</div>}
-            {logs.map((l, i) => (
+            {replaying && (
+              <div className="mb-1 text-[10px] text-accent">
+                ▶ リプレイ中 {replayCount}/{logs.length}
+              </div>
+            )}
+            {(replaying ? logs.slice(0, replayCount) : logs).map((l, i) => (
               <div key={i} className={STREAM_COLOR[l.stream]}>
                 {l.stream === 'system' ? '» ' : ''}
                 {l.text}

@@ -15,6 +15,7 @@ import type {
   SessionSummary,
   Usage,
 } from './types';
+import type { AuditEvent, Member } from './types';
 import type { Role, User, WorkspaceInfo } from './auth';
 
 // #20 デモ用ガードレール（サーバの denyCommands と同等の代表例）
@@ -74,6 +75,49 @@ class DemoBackend {
 
   listRepos(workspaceId: string): Repo[] {
     return this.repos.filter((r) => r.workspaceId === workspaceId);
+  }
+
+  // 監査ログ（デモはクライアント内で記録）
+  private auditLog: AuditEvent[] = [];
+  private auditPrev = 'genesis';
+  private recordAudit(action: string, outcome: AuditEvent['outcome'], target: string | null, detail?: string) {
+    const e: AuditEvent = {
+      ts: Date.now(),
+      actorId: this.user.id,
+      actorEmail: this.user.email,
+      action,
+      workspaceId: this.workspaces[0]?.id ?? 'default',
+      target,
+      outcome,
+      detail,
+      prevHash: this.auditPrev,
+      hash: (this.auditPrev + action + Date.now()).length.toString(16) + Math.random().toString(16).slice(2, 8),
+    };
+    this.auditPrev = e.hash!;
+    this.auditLog.push(e);
+    if (this.auditLog.length > 2000) this.auditLog.shift();
+  }
+  audit(): { siemConnected: boolean; events: AuditEvent[] } {
+    return { siemConnected: false, events: [...this.auditLog].slice(-500).reverse() };
+  }
+
+  // メンバー管理（デモ）
+  private members: Member[] = [
+    { id: 'demo', email: 'demo@corral', name: 'デモユーザー', provider: 'demo', role: 'owner' },
+  ];
+  listMembers(): Member[] {
+    return this.members.map((m) => (m.id === this.user.id ? { ...m, role: this.role } : m));
+  }
+  addMember(email: string, name: string, role: Role): Member {
+    const existing = this.members.find((m) => m.email === email);
+    if (existing) {
+      existing.role = role;
+      return existing;
+    }
+    const m: Member = { id: id8(), email, name: name || email, provider: 'invited', role };
+    this.members.push(m);
+    this.recordAudit('member.add', 'success', m.id, `${email} as ${role}`);
+    return m;
   }
   // ⑤ デモユーザー＆ロール（UI でロール切替して RBAC を体験できる）
   private user: User = { id: 'demo', email: 'demo@corral', name: 'デモユーザー', provider: 'demo' };
@@ -135,6 +179,7 @@ class DemoBackend {
       autoAccept?: boolean;
       title?: string;
       repoId?: string;
+      dependsOn?: string[];
     },
     workspaceId = 'default'
   ): SessionSummary[] {
@@ -154,6 +199,7 @@ class DemoBackend {
         status: 'queued',
         workspaceId,
         repoId: input.repoId ?? this.repos.find((r) => r.workspaceId === workspaceId)?.id ?? null,
+        dependsOn: input.dependsOn ?? [],
         violations: [],
         worktreePath: `/(demo)/.corral/worktrees/${id}`,
         branch: `corral/${id}`,
@@ -184,7 +230,10 @@ class DemoBackend {
       }
       const repoName = this.repos.find((r) => r.id === s.repoId)?.name ?? 'default';
       this.log(s, 'system', `worktree を作成: ${s.branch}（repo: ${repoName}）`);
-      this.run(s, input.prompt, false);
+      this.recordAudit('session.create', 'success', s.id, input.prompt.slice(0, 60));
+      // #1 依存タスク未完了なら待機
+      if (this.depsSatisfied(s)) this.run(s, input.prompt, false);
+      else this.log(s, 'system', `依存タスクの完了待ち: ${s.dependsOn?.join(', ')}`);
       created.push(toSummary(s));
     }
     return created;
@@ -194,6 +243,19 @@ class DemoBackend {
     s.violations.push(v);
     this.log(s, 'system', `🛡 ガードレール: ${v.detail}${v.blocked ? '（ブロック）' : '（警告）'}`);
     this.emit({ type: 'guardrail', sessionId: s.id, violation: v });
+    this.recordAudit(`guardrail.${v.kind}`, v.blocked ? 'denied' : 'error', s.id, v.detail);
+  }
+
+  private depsSatisfied(s: DemoSession): boolean {
+    return (s.dependsOn ?? []).every((id) => this.sessions.get(id)?.status === 'done');
+  }
+  private promoteReady(): void {
+    for (const s of this.sessions.values()) {
+      if (s.status === 'queued' && (s.dependsOn?.length ?? 0) > 0 && this.depsSatisfied(s)) {
+        this.log(s, 'system', '依存タスクが完了。開始します。');
+        this.run(s, s.prompt, false);
+      }
+    }
   }
 
   instruct(id: string, text: string): { ok: boolean } {
@@ -314,6 +376,10 @@ class DemoBackend {
     s.status = status;
     s.updatedAt = Date.now();
     this.update(s);
+    if (status === 'done') {
+      this.recordAudit('session.approve', 'success', s.id);
+      this.promoteReady(); // #1 依存待ちを起動
+    }
     // ① 通知（デモは外部送信せずアプリ内通知のみ）
     if (NOTIFY_EVENTS.includes(status)) {
       const mark =

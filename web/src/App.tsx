@@ -7,6 +7,8 @@ import { DetailPanel } from './components/DetailPanel';
 import { NotificationCenter } from './components/NotificationCenter';
 import { Dashboard } from './components/Dashboard';
 import { WorkspaceBar } from './components/WorkspaceBar';
+import { AuditView } from './components/AuditView';
+import { MembersView } from './components/MembersView';
 import { Login } from './components/Login';
 import { api } from './lib/api';
 import { connectWs } from './lib/ws';
@@ -17,7 +19,7 @@ import { STATUS_META } from './lib/types';
 
 const STATUS_ORDER: SessionStatus[] = ['needs_review', 'running', 'queued', 'error', 'done', 'stopped'];
 
-type View = 'command' | 'dashboard';
+type View = 'command' | 'dashboard' | 'audit' | 'members';
 interface BudgetBanner { level: 'alert' | 'exceeded'; totalUsd: number; budgetUsd: number }
 
 export default function App() {
@@ -250,6 +252,8 @@ export default function App() {
         <div className="ml-1 flex items-center gap-1 rounded-lg border border-edge bg-panel2 p-0.5">
           <TabBtn v="command" label="🎯 司令塔" />
           <TabBtn v="dashboard" label="📊 ダッシュボード" />
+          {can(role, 'member:manage') && <TabBtn v="members" label="👥 メンバー" />}
+          {can(role, 'audit:view') && <TabBtn v="audit" label="📋 監査" />}
         </div>
 
         <div className="ml-auto flex items-center gap-3">
@@ -284,6 +288,14 @@ export default function App() {
       {view === 'dashboard' ? (
         <div className="flex min-h-0 flex-1 flex-col p-4">
           <Dashboard sessions={wsSessions} />
+        </div>
+      ) : view === 'audit' ? (
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <AuditView load={(action) => api.audit(action)} />
+        </div>
+      ) : view === 'members' ? (
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <MembersView workspaceName={workspaces.find((w) => w.id === currentWs)?.name ?? ''} />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">

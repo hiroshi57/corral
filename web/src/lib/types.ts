@@ -36,6 +36,28 @@ export interface GuardrailViolation {
   blocked: boolean;
 }
 
+export interface AuditEvent {
+  ts: number;
+  actorId: string;
+  actorEmail: string;
+  action: string;
+  workspaceId: string | null;
+  target: string | null;
+  outcome: 'success' | 'denied' | 'error';
+  detail?: string;
+  ip?: string;
+  hash?: string;
+  prevHash?: string;
+}
+
+export interface Member {
+  id: string;
+  email: string;
+  name: string;
+  provider: string;
+  role: import('./auth').Role;
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -44,6 +66,7 @@ export interface SessionSummary {
   status: SessionStatus;
   workspaceId: string;
   repoId: string | null;
+  dependsOn?: string[];
   violations: GuardrailViolation[];
   worktreePath: string | null;
   branch: string | null;

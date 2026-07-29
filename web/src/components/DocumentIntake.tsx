@@ -27,6 +27,7 @@ export function DocumentIntake({
   const [agent, setAgent] = useState<AgentKind>('claude');
   const [repoId, setRepoId] = useState('');
   const [autoAccept, setAutoAccept] = useState(false);
+  const [sequential, setSequential] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -74,18 +75,22 @@ export function DocumentIntake({
     if (!chosen.length) return;
     setBusy(true);
     try {
-      // 案件（現在のワークスペース）へ 1 タスク=1 ワーカーで一括割り当て
+      // 案件（現在のワークスペース）へ 1 タスク=1 ワーカーで割り当て。
+      // sequential=依存関係（前のタスク完了後に次を開始）の DAG チェーン。
+      let prevId: string | null = null;
       for (const c of chosen) {
-        await api.createSessions({
+        const created = await api.createSessions({
           agent,
           prompt: c.text,
           count: 1,
           autoAccept,
           repoId: repoId || undefined,
           title: c.text.slice(0, 40),
+          dependsOn: sequential && prevId ? [prevId] : undefined,
         });
+        prevId = created[0]?.id ?? null;
       }
-      flash(`${chosen.length} 件のタスクを案件へ割り当てました`);
+      flash(`${chosen.length} 件のタスクを案件へ割り当てました${sequential ? '（順次実行）' : ''}`);
       setCandidates([]);
       setDocName('');
       onChanged();
@@ -183,6 +188,10 @@ export function DocumentIntake({
             <label className="flex cursor-pointer items-center gap-1 text-xs text-slate-400">
               <input type="checkbox" checked={autoAccept} onChange={(e) => setAutoAccept(e.target.checked)} />
               自動承認
+            </label>
+            <label className="flex cursor-pointer items-center gap-1 text-xs text-slate-400" title="前のタスク完了後に次を開始（依存関係）">
+              <input type="checkbox" checked={sequential} onChange={(e) => setSequential(e.target.checked)} />
+              順次実行(依存)
             </label>
             <button
               onClick={dispatch}

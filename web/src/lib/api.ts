@@ -1,5 +1,6 @@
 // REST API クライアント（デモモード時はブラウザ内バックエンドへ委譲）
-import type { AgentKind, FinopsSummary, LogLine, NotifyEvent, Repo, SessionSummary } from './types';
+import type { AgentKind, AuditEvent, FinopsSummary, LogLine, Member, NotifyEvent, Repo, SessionSummary } from './types';
+import type { Role } from './auth';
 import { demoBackend, IS_DEMO } from './demo';
 import { store, type User, type WorkspaceInfo } from './auth';
 
@@ -60,6 +61,7 @@ export const api = {
     autoAccept?: boolean;
     title?: string;
     repoId?: string;
+    dependsOn?: string[];
   }) =>
     IS_DEMO
       ? Promise.resolve(demoBackend.createSessions(input, store.getWorkspace()))
@@ -158,4 +160,23 @@ export const api = {
           method: 'POST',
           body: JSON.stringify({ text, agent }),
         }).catch(() => ({ tasks: [] as string[] })),
+
+  // 監査ログ（owner/admin）
+  audit: (action?: string) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.audit())
+      : req<{ siemConnected: boolean; events: AuditEvent[] }>(
+          `/audit${action ? `?action=${encodeURIComponent(action)}` : ''}`
+        ),
+
+  // メンバー管理
+  listMembers: () =>
+    IS_DEMO ? Promise.resolve(demoBackend.listMembers()) : req<Member[]>('/workspaces/members'),
+  addMember: (email: string, name: string, role: Role) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.addMember(email, name, role))
+      : req<Member>('/workspaces/members', {
+          method: 'POST',
+          body: JSON.stringify({ email, name, role }),
+        }),
 };

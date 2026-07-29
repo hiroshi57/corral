@@ -128,6 +128,8 @@ export interface Session {
   workspaceId: string;
   /** #4 対象リポジトリID */
   repoId: string | null;
+  /** #1 依存タスク（この session ID 群が done になるまで開始しない） */
+  dependsOn: string[];
   /** #20 ガードレール違反の履歴 */
   violations: GuardrailViolation[];
   /** 作業ブランチ名 */
@@ -179,4 +181,6 @@ export interface CreateSessionInput {
   autoAccept?: boolean;
   /** #4 対象リポジトリID */
   repoId?: string;
+  /** #1 依存タスク（これらが完了してから開始） */
+  dependsOn?: string[];
 }

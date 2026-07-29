@@ -93,6 +93,7 @@ export class SessionManager extends EventEmitter {
       status: 'queued',
       workspaceId,
       repoId: input.repoId ?? null,
+      dependsOn: input.dependsOn ?? [],
       violations: [],
       worktreePath: null,
       branch: null,
@@ -128,7 +129,12 @@ export class SessionManager extends EventEmitter {
       session.worktreePath = worktreePath;
       session.branch = branch;
       this.appendLog(session, 'system', `worktree を作成: ${branch}（repo: ${repo?.name ?? 'default'}）`);
-      this.startRun(session, session.prompt, false);
+      // #1 依存タスクが未完了なら待機（queued のまま）。完了時に promoteReady で起動
+      if (!this.depsSatisfied(session)) {
+        this.appendLog(session, 'system', `依存タスクの完了待ち: ${session.dependsOn.join(', ')}`);
+      } else {
+        this.startRun(session, session.prompt, false);
+      }
     } catch (err) {
       this.appendLog(session, 'system', `worktree 作成に失敗: ${(err as Error).message}`);
       this.setStatus(session, 'error');
@@ -156,6 +162,27 @@ export class SessionManager extends EventEmitter {
   private repoRootOf(session: Session): string {
     const repo = session.repoId ? repoStore.get(session.repoId) : undefined;
     return repo?.path ?? config.repoRoot;
+  }
+
+  /** #1 依存タスクがすべて done か */
+  private depsSatisfied(session: Session): boolean {
+    return session.dependsOn.every((depId) => this.sessions.get(depId)?.status === 'done');
+  }
+
+  /** #1 依存が満たされた待機中タスクを起動する */
+  private promoteReady(): void {
+    for (const s of this.sessions.values()) {
+      if (
+        s.status === 'queued' &&
+        s.worktreePath &&
+        !this.runners.has(s.id) &&
+        s.dependsOn.length > 0 &&
+        this.depsSatisfied(s)
+      ) {
+        this.appendLog(s, 'system', '依存タスクが完了。開始します。');
+        this.startRun(s, s.prompt, false);
+      }
+    }
   }
 
   /**
@@ -380,6 +407,8 @@ export class SessionManager extends EventEmitter {
     if (config.notify.events.includes(status)) {
       void this.dispatchNotify(session);
     }
+    // #1 完了したら依存待ちタスクを起動
+    if (status === 'done') this.promoteReady();
   }
 
   private async dispatchNotify(session: Session): Promise<void> {
