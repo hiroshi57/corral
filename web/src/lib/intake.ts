@@ -17,6 +17,18 @@ export interface ExtractResult {
   note?: string;
 }
 
+// pdfjs の最小型（依存の型に縛られないための局所定義）
+interface PdfTextItem {
+  str?: string;
+}
+interface PdfPage {
+  getTextContent: () => Promise<{ items: PdfTextItem[] }>;
+}
+interface PdfDoc {
+  numPages: number;
+  getPage: (n: number) => Promise<PdfPage>;
+}
+
 export async function extractText(file: File): Promise<ExtractResult> {
   const name = file.name.toLowerCase();
   const isText =
@@ -37,7 +49,24 @@ export async function extractText(file: File): Promise<ExtractResult> {
     }
   }
   if (name.endsWith('.pdf')) {
-    return { text: '', ok: false, note: 'PDF は今後対応予定です。テキスト/Markdown/Word(.docx) をご利用ください。' };
+    try {
+      const pdfjs = (await import('pdfjs-dist')) as unknown as {
+        GlobalWorkerOptions: { workerSrc: string };
+        getDocument: (o: { data: ArrayBuffer }) => { promise: Promise<PdfDoc> };
+      };
+      const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+      const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+      let text = '';
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map((it) => it.str ?? '').join(' ') + '\n';
+      }
+      return { text, ok: true };
+    } catch (e) {
+      return { text: '', ok: false, note: `PDF 解析に失敗: ${(e as Error).message}` };
+    }
   }
   // 最後の手段: テキストとして読む
   try {

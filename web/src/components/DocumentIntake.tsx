@@ -52,7 +52,15 @@ export function DocumentIntake({
       }
       if (!texts.length) return;
       setDocName(names.join(', '));
-      const tasks = decomposeToTasks(texts.join('\n\n'));
+      const merged = texts.join('\n\n');
+      // まず実エージェント(LLMプランナー)で分解 → 無ければヒューリスティックにフォールバック
+      let tasks: string[] = [];
+      try {
+        tasks = (await api.planTasks(merged, agent)).tasks;
+      } catch {
+        /* fallback below */
+      }
+      if (!tasks.length) tasks = decomposeToTasks(merged);
       setCandidates(tasks.map((t) => ({ text: t, enabled: true })));
       if (repos.length && !repoId) setRepoId(repos[0].id);
       if (tasks.length === 0) flash('タスク候補を抽出できませんでした。内容をご確認ください。');

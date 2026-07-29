@@ -9,7 +9,8 @@ import { tenancy } from '../tenancy/store.js';
 import { repoStore } from '../tenancy/repos.js';
 import { ROLE_LABEL } from '../auth/rbac.js';
 import { audit } from '../audit/log.js';
-import type { AuditEvent, CreateSessionInput, Role } from '../types.js';
+import { planDocument } from '../intake/planner.js';
+import type { AgentKind, AuditEvent, CreateSessionInput, Role } from '../types.js';
 
 export function createRouter(sessions: SessionManager): Router {
   const router = Router();
@@ -164,6 +165,15 @@ export function createRouter(sessions: SessionManager): Router {
     res.json(
       await notify({ sessionId: 'test', title: '通知テスト', status: 'done', branch: null, demo: config.demo })
     );
+  });
+
+  // ドキュメント → LLM プランナーでタスク分解（実エージェント。空なら client がフォールバック）
+  router.post('/intake/plan', resolveWorkspace, requirePerm('session:create'), async (req, res) => {
+    const { text, agent } = req.body as { text?: string; agent?: AgentKind };
+    if (!text?.trim()) return res.status(400).json({ error: 'text は必須です' });
+    const tasks = await planDocument(text, agent ?? 'claude');
+    rec(req, 'intake.plan', 'success', null, `${tasks.length} tasks`);
+    res.json({ tasks });
   });
 
   // 監査ログ（owner/admin のみ）+ SIEM 状態

@@ -4,12 +4,15 @@
 // - SIEM(Splunk HEC / Datadog / 汎用) へ HTTP Webhook 転送
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { config } from '../config.js';
 import type { AuditEvent } from '../types.js';
 
 class AuditLog {
   private mem: AuditEvent[] = [];
   private ready = false;
+  /** 改ざん検知用ハッシュチェーンの直前ハッシュ */
+  private prevHash = 'genesis';
 
   private ensure(): void {
     if (this.ready) return;
@@ -26,20 +29,27 @@ class AuditLog {
     if (!config.audit.enabled) return event;
     this.ensure();
 
+    // 改ざん検知: 直前ハッシュ + 本イベントを連結してハッシュ化（チェーン）
+    const hash = createHash('sha256')
+      .update(this.prevHash + JSON.stringify(event))
+      .digest('hex');
+    const chained = { ...event, prevHash: this.prevHash, hash };
+    this.prevHash = hash;
+
     // メモリ（API用リングバッファ）
-    this.mem.push(event);
+    this.mem.push(chained);
     if (this.mem.length > config.audit.maxInMemory) this.mem.shift();
 
-    // 永続化（JSONL 追記）
+    // 永続化（JSONL 追記。hash 付きで改ざん検知可能）
     try {
-      fs.appendFileSync(config.audit.file, JSON.stringify(event) + '\n');
+      fs.appendFileSync(config.audit.file, JSON.stringify(chained) + '\n');
     } catch {
       /* 失敗しても致命ではない */
     }
 
     // SIEM 転送（非同期・失敗は握りつぶす）
-    void this.forward(event);
-    return event;
+    void this.forward(chained);
+    return chained;
   }
 
   private async forward(event: AuditEvent): Promise<void> {

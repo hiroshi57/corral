@@ -26,6 +26,8 @@ export function DetailPanel({
   const [tab, setTab] = useState<'log' | 'diff'>('log');
   const [diff, setDiff] = useState('');
   const [instruction, setInstruction] = useState('');
+  // #6 インラインコメント（diff の行に指摘を付けて差し戻し）
+  const [comments, setComments] = useState<Array<{ target: string; note: string }>>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,6 +54,17 @@ export function DetailPanel({
     if (!instruction.trim()) return;
     await api.instruct(session.id, instruction);
     setInstruction('');
+    onChanged();
+  };
+
+  const sendReview = async () => {
+    const filled = comments.filter((c) => c.note.trim());
+    if (!filled.length) return;
+    const body =
+      '以下のレビュー指摘を反映して修正してください:\n' +
+      filled.map((c, i) => `${i + 1}. 対象「${c.target.slice(0, 80)}」→ 指摘: ${c.note}`).join('\n');
+    await api.instruct(session.id, body);
+    setComments([]);
     onChanged();
   };
 
@@ -99,10 +112,66 @@ export function DetailPanel({
             ))}
             <div ref={logEndRef} />
           </>
+        ) : diff ? (
+          <div>
+            <div className="mb-2 text-[10px] text-slate-500">
+              行をクリックすると指摘（インラインコメント）を追加できます
+            </div>
+            {diff.split('\n').map((line, i) => {
+              const added = line.startsWith('+');
+              const removed = line.startsWith('-');
+              return (
+                <div
+                  key={i}
+                  onClick={() =>
+                    canInstruct &&
+                    line.trim() &&
+                    setComments((prev) => [...prev, { target: line, note: '' }])
+                  }
+                  className={`cursor-pointer whitespace-pre-wrap px-1 hover:bg-edge/60 ${
+                    added ? 'text-emerald-300' : removed ? 'text-rose-300' : 'text-slate-400'
+                  }`}
+                >
+                  {line || ' '}
+                </div>
+              );
+            })}
+          </div>
         ) : (
-          <pre className="whitespace-pre-wrap text-slate-300">{diff || '差分はありません'}</pre>
+          <div className="text-slate-500">差分はありません</div>
         )}
       </div>
+
+      {/* #6 インラインコメント（レビュー指摘） */}
+      {tab === 'diff' && comments.length > 0 && (
+        <div className="border-t border-edge bg-panel px-3 py-2">
+          <div className="mb-1 text-[11px] font-bold text-accent">レビュー指摘（{comments.length}）</div>
+          <div className="max-h-40 space-y-1 overflow-auto">
+            {comments.map((c, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <code className="mt-1 max-w-[40%] truncate text-[10px] text-slate-500">{c.target}</code>
+                <input
+                  autoFocus={i === comments.length - 1}
+                  value={c.note}
+                  onChange={(e) =>
+                    setComments((prev) => prev.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)))
+                  }
+                  placeholder="この行への指摘…"
+                  className="flex-1 rounded border border-edge bg-panel2 px-2 py-1 text-xs focus:border-accent focus:outline-none"
+                />
+                <button onClick={() => setComments((prev) => prev.filter((_, j) => j !== i))} className="text-xs text-slate-500 hover:text-rose-300">✕</button>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={sendReview}
+            disabled={!canInstruct}
+            className="mt-2 rounded-lg bg-accent px-3 py-1 text-xs font-bold text-black disabled:opacity-40"
+          >
+            ↩ 指摘を反映して差し戻し
+          </button>
+        </div>
+      )}
 
       {/* #20 ガードレール違反 */}
       {session.violations?.length > 0 && (

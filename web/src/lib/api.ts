@@ -149,4 +149,13 @@ export const api = {
   // #4 マルチリポ
   listRepos: () =>
     IS_DEMO ? Promise.resolve(demoBackend.listRepos(store.getWorkspace())) : req<Repo[]>('/repos'),
+
+  // ドキュメント → LLM プランナー（実エージェント）。demo/失敗時は空→client がフォールバック
+  planTasks: (text: string, agent?: AgentKind) =>
+    IS_DEMO
+      ? Promise.resolve<{ tasks: string[] }>({ tasks: [] })
+      : req<{ tasks: string[] }>('/intake/plan', {
+          method: 'POST',
+          body: JSON.stringify({ text, agent }),
+        }).catch(() => ({ tasks: [] as string[] })),
 };
