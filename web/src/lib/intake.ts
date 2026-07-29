@@ -29,6 +29,16 @@ interface PdfDoc {
   getPage: (n: number) => Promise<PdfPage>;
 }
 
+function decodeXml(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
 export async function extractText(file: File): Promise<ExtractResult> {
   const name = file.name.toLowerCase();
   const isText =
@@ -47,6 +57,29 @@ export async function extractText(file: File): Promise<ExtractResult> {
     } catch (e) {
       return { text: '', ok: false, note: `docx 解析に失敗: ${(e as Error).message}` };
     }
+  }
+  if (name.endsWith('.pptx')) {
+    try {
+      const JSZip = (await import('jszip')).default;
+      const zip = await JSZip.loadAsync(await file.arrayBuffer());
+      const slideNo = (n: string) => Number(n.match(/slide(\d+)\.xml$/)?.[1] ?? 0);
+      const slides = Object.keys(zip.files)
+        .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+        .sort((a, b) => slideNo(a) - slideNo(b));
+      let text = '';
+      for (const s of slides) {
+        const xml = await zip.files[s].async('string');
+        const runs = xml.match(/<a:t>([\s\S]*?)<\/a:t>/g) ?? [];
+        const slideText = runs.map((r) => decodeXml(r.replace(/<[^>]+>/g, ''))).join(' ').trim();
+        if (slideText) text += slideText + '\n';
+      }
+      return { text, ok: true };
+    } catch (e) {
+      return { text: '', ok: false, note: `pptx 解析に失敗: ${(e as Error).message}` };
+    }
+  }
+  if (name.endsWith('.ppt')) {
+    return { text: '', ok: false, note: '旧形式(.ppt)は非対応です。.pptx で保存し直してください。' };
   }
   if (name.endsWith('.pdf')) {
     try {

@@ -125,12 +125,12 @@ export function DocumentIntake({
         <span className="text-2xl">⬇️</span>
         <span>ここにファイルをドラッグ&ドロップ</span>
         <span className="text-[10px] text-slate-600">
-          対応: .txt / .md / .csv / .json / .docx（PDFは今後対応）
+          対応: .txt / .md / .csv / .json / .docx / .pptx / .pdf
         </span>
         <input
           type="file"
           multiple
-          accept=".txt,.md,.markdown,.csv,.tsv,.json,.log,.yml,.yaml,.docx,text/*"
+          accept=".txt,.md,.markdown,.csv,.tsv,.json,.log,.yml,.yaml,.docx,.pptx,.pdf,text/*"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />
