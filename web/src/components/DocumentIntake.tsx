@@ -27,7 +27,8 @@ export function DocumentIntake({
   const [agent, setAgent] = useState<AgentKind>('claude');
   const [repoId, setRepoId] = useState('');
   const [autoAccept, setAutoAccept] = useState(false);
-  const [sequential, setSequential] = useState(false);
+  // グラフ・エンジニアリング: 直線でなく DAG として編成
+  const [structure, setStructure] = useState<'parallel' | 'serial' | 'phased'>('parallel');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -75,22 +76,45 @@ export function DocumentIntake({
     if (!chosen.length) return;
     setBusy(true);
     try {
-      // 案件（現在のワークスペース）へ 1 タスク=1 ワーカーで割り当て。
-      // sequential=依存関係（前のタスク完了後に次を開始）の DAG チェーン。
-      let prevId: string | null = null;
-      for (const c of chosen) {
+      // グラフとして編成（parallel=独立 / serial=一直線 / phased=フェーズDAG）
+      const create = async (text: string, dependsOn?: string[]) => {
         const created = await api.createSessions({
           agent,
-          prompt: c.text,
+          prompt: text,
           count: 1,
           autoAccept,
           repoId: repoId || undefined,
-          title: c.text.slice(0, 40),
-          dependsOn: sequential && prevId ? [prevId] : undefined,
+          title: text.slice(0, 40),
+          dependsOn: dependsOn?.length ? dependsOn : undefined,
         });
-        prevId = created[0]?.id ?? null;
+        return created[0]?.id ?? null;
+      };
+
+      if (structure === 'phased') {
+        // 見出し接頭辞（"セクション: 内容" の先頭）でフェーズにグループ化。
+        // 各フェーズは前フェーズの全タスク完了に依存（fan-in / fan-out の DAG）。
+        const phases = new Map<string, string[]>();
+        for (const c of chosen) {
+          const key = c.text.includes(': ') ? c.text.split(': ')[0] : '__default__';
+          (phases.get(key) ?? phases.set(key, []).get(key)!).push(c.text);
+        }
+        let prevIds: string[] = [];
+        for (const [, texts] of phases) {
+          const ids: string[] = [];
+          for (const t of texts) {
+            const id = await create(t, prevIds);
+            if (id) ids.push(id);
+          }
+          prevIds = ids;
+        }
+      } else if (structure === 'serial') {
+        let prev: string | null = null;
+        for (const c of chosen) prev = await create(c.text, prev ? [prev] : undefined);
+      } else {
+        for (const c of chosen) await create(c.text);
       }
-      flash(`${chosen.length} 件のタスクを案件へ割り当てました${sequential ? '（順次実行）' : ''}`);
+      const label = structure === 'phased' ? '（段階DAG）' : structure === 'serial' ? '（直列）' : '';
+      flash(`${chosen.length} 件のタスクを案件へ割り当てました${label}`);
       setCandidates([]);
       setDocName('');
       onChanged();
@@ -189,9 +213,17 @@ export function DocumentIntake({
               <input type="checkbox" checked={autoAccept} onChange={(e) => setAutoAccept(e.target.checked)} />
               自動承認
             </label>
-            <label className="flex cursor-pointer items-center gap-1 text-xs text-slate-400" title="前のタスク完了後に次を開始（依存関係）">
-              <input type="checkbox" checked={sequential} onChange={(e) => setSequential(e.target.checked)} />
-              順次実行(依存)
+            <label className="flex items-center gap-1 text-xs text-slate-400" title="グラフ・エンジニアリング: 直線でなく DAG として編成">
+              構成
+              <select
+                value={structure}
+                onChange={(e) => setStructure(e.target.value as typeof structure)}
+                className="rounded-lg border border-edge bg-panel px-1.5 py-1 text-xs"
+              >
+                <option value="parallel">並列（独立）</option>
+                <option value="serial">直列（順次）</option>
+                <option value="phased">段階（フェーズDAG）</option>
+              </select>
             </label>
             <button
               onClick={dispatch}
