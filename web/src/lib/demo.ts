@@ -15,7 +15,7 @@ import type {
   SessionSummary,
   Usage,
 } from './types';
-import type { AuditEvent, Member } from './types';
+import type { AuditEvent, DetectedAgent, Member, SearchHit } from './types';
 import type { Role, User, WorkspaceInfo } from './auth';
 
 // #20 デモ用ガードレール（サーバの denyCommands と同等の代表例）
@@ -180,6 +180,8 @@ class DemoBackend {
       title?: string;
       repoId?: string;
       dependsOn?: string[];
+      dependsCondition?: 'success' | 'failure' | 'any';
+      graphPos?: { x: number; y: number };
     },
     workspaceId = 'default'
   ): SessionSummary[] {
@@ -200,6 +202,8 @@ class DemoBackend {
         workspaceId,
         repoId: input.repoId ?? this.repos.find((r) => r.workspaceId === workspaceId)?.id ?? null,
         dependsOn: input.dependsOn ?? [],
+        dependsCondition: input.dependsCondition ?? 'success',
+        graphPos: input.graphPos,
         violations: [],
         worktreePath: `/(demo)/.corral/worktrees/${id}`,
         branch: `corral/${id}`,
@@ -246,8 +250,71 @@ class DemoBackend {
     this.recordAudit(`guardrail.${v.kind}`, v.blocked ? 'denied' : 'error', s.id, v.detail);
   }
 
+  /** 条件付きエッジ: success/failure/any */
   private depsSatisfied(s: DemoSession): boolean {
-    return (s.dependsOn ?? []).every((id) => this.sessions.get(id)?.status === 'done');
+    const cond = s.dependsCondition ?? 'success';
+    return (s.dependsOn ?? []).every((id) => {
+      const st = this.sessions.get(id)?.status;
+      if (!st) return false;
+      if (cond === 'success') return st === 'done';
+      if (cond === 'failure') return st === 'error' || st === 'stopped';
+      return st === 'done' || st === 'error' || st === 'stopped';
+    });
+  }
+
+  /** グラフGUIエディタ: 依存/条件/座標を更新（循環防止） */
+  updateGraph(
+    id: string,
+    patch: { dependsOn?: string[]; dependsCondition?: 'success' | 'failure' | 'any'; graphPos?: { x: number; y: number } }
+  ): { ok: boolean } {
+    const s = this.sessions.get(id);
+    if (!s) return { ok: false };
+    if (patch.dependsOn) s.dependsOn = patch.dependsOn.filter((d) => d !== id && !this.wouldCycle(id, d));
+    if (patch.dependsCondition) s.dependsCondition = patch.dependsCondition;
+    if (patch.graphPos) s.graphPos = patch.graphPos;
+    s.updatedAt = Date.now();
+    this.update(s);
+    this.promoteReady();
+    return { ok: true };
+  }
+
+  private wouldCycle(target: string, dep: string, seen = new Set<string>()): boolean {
+    if (dep === target) return true;
+    if (seen.has(dep)) return false;
+    seen.add(dep);
+    return (this.sessions.get(dep)?.dependsOn ?? []).some((x) => this.wouldCycle(target, x, seen));
+  }
+
+  /** セッション横断検索 */
+  search(query: string, workspaceId?: string): SearchHit[] {
+    const q = query.toLowerCase();
+    if (!q) return [];
+    const out: SearchHit[] = [];
+    for (const s of this.sessions.values()) {
+      if (workspaceId && s.workspaceId !== workspaceId) continue;
+      const hits: string[] = [];
+      if (s.title.toLowerCase().includes(q)) hits.push(`タイトル: ${s.title}`);
+      for (const t of s.turns) if (t.toLowerCase().includes(q)) hits.push(`指示: ${t.slice(0, 120)}`);
+      for (const l of s.logs) {
+        if (l.text.toLowerCase().includes(q)) {
+          hits.push(`ログ: ${l.text.slice(0, 120)}`);
+          if (hits.length > 6) break;
+        }
+      }
+      if (hits.length) out.push({ session: toSummary(s), hits: hits.slice(0, 6) });
+    }
+    return out.slice(0, 50);
+  }
+
+  /** エージェント自動検出（デモは全て利用可能として表示） */
+  detectAgents(): DetectedAgent[] {
+    return (['claude', 'codex', 'gemini', 'aider'] as const).map((kind) => ({
+      kind,
+      label: AGENT_LABEL[kind],
+      command: kind,
+      available: true,
+      version: 'demo',
+    }));
   }
   private promoteReady(): void {
     for (const s of this.sessions.values()) {
@@ -376,9 +443,9 @@ class DemoBackend {
     s.status = status;
     s.updatedAt = Date.now();
     this.update(s);
-    if (status === 'done') {
-      this.recordAudit('session.approve', 'success', s.id);
-      this.promoteReady(); // #1 依存待ちを起動
+    if (status === 'done' || status === 'error' || status === 'stopped') {
+      if (status === 'done') this.recordAudit('session.approve', 'success', s.id);
+      this.promoteReady(); // 条件付きエッジ(success/failure/any)で依存待ちを起動
     }
     // ① 通知（デモは外部送信せずアプリ内通知のみ）
     if (NOTIFY_EVENTS.includes(status)) {

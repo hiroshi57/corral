@@ -10,6 +10,10 @@ const AGENTS: AgentKind[] = ['claude', 'codex', 'gemini', 'aider'];
 interface Candidate {
   text: string;
   enabled: boolean;
+  /** AI が出したグラフの一時ID */
+  ref?: number;
+  /** 依存する ref 群（AI 生成の DAG） */
+  deps?: number[];
 }
 
 export function DocumentIntake({
@@ -28,7 +32,7 @@ export function DocumentIntake({
   const [repoId, setRepoId] = useState('');
   const [autoAccept, setAutoAccept] = useState(false);
   // グラフ・エンジニアリング: 直線でなく DAG として編成
-  const [structure, setStructure] = useState<'parallel' | 'serial' | 'phased'>('parallel');
+  const [structure, setStructure] = useState<'ai' | 'parallel' | 'serial' | 'phased'>('ai');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -55,15 +59,29 @@ export function DocumentIntake({
       if (!texts.length) return;
       setDocName(names.join(', '));
       const merged = texts.join('\n\n');
-      // まず実エージェント(LLMプランナー)で分解 → 無ければヒューリスティックにフォールバック
-      let tasks: string[] = [];
+      // ① AI にグラフ(依存付き)を直接出力させる → ② 平坦なタスク列 → ③ ヒューリスティック
+      let cands: Candidate[] = [];
       try {
-        tasks = (await api.planTasks(merged, agent)).tasks;
+        const { nodes } = await api.planGraph(merged, agent);
+        if (nodes.length) {
+          cands = nodes.map((n) => ({ text: n.text, enabled: true, ref: n.ref, deps: n.deps }));
+          flash(`AI が ${nodes.length} ノードの依存グラフを生成しました`);
+        }
       } catch {
-        /* fallback below */
+        /* fallthrough */
       }
-      if (!tasks.length) tasks = decomposeToTasks(merged);
-      setCandidates(tasks.map((t) => ({ text: t, enabled: true })));
+      if (!cands.length) {
+        let tasks: string[] = [];
+        try {
+          tasks = (await api.planTasks(merged, agent)).tasks;
+        } catch {
+          /* fallback below */
+        }
+        if (!tasks.length) tasks = decomposeToTasks(merged);
+        cands = tasks.map((t) => ({ text: t, enabled: true }));
+      }
+      const tasks = cands.map((c) => c.text);
+      setCandidates(cands);
       if (repos.length && !repoId) setRepoId(repos[0].id);
       if (tasks.length === 0) flash('タスク候補を抽出できませんでした。内容をご確認ください。');
     } finally {
@@ -90,7 +108,19 @@ export function DocumentIntake({
         return created[0]?.id ?? null;
       };
 
-      if (structure === 'phased') {
+      if (structure === 'ai' && chosen.some((c) => c.ref !== undefined)) {
+        // AI が出した DAG をそのまま構築（ref → 実 session ID を解決しつつトポロジカル順に作成）
+        const refToId = new Map<number, string>();
+        const pending = [...chosen];
+        let guard = 0;
+        while (pending.length && guard++ < 200) {
+          const idx = pending.findIndex((c) => (c.deps ?? []).every((d) => refToId.has(d) || !chosen.some((x) => x.ref === d)));
+          const c = pending.splice(idx >= 0 ? idx : 0, 1)[0];
+          const deps = (c.deps ?? []).map((d) => refToId.get(d)).filter((x): x is string => !!x);
+          const id = await create(c.text, deps);
+          if (id && c.ref !== undefined) refToId.set(c.ref, id);
+        }
+      } else if (structure === 'phased') {
         // 見出し接頭辞（"セクション: 内容" の先頭）でフェーズにグループ化。
         // 各フェーズは前フェーズの全タスク完了に依存（fan-in / fan-out の DAG）。
         const phases = new Map<string, string[]>();
@@ -113,7 +143,14 @@ export function DocumentIntake({
       } else {
         for (const c of chosen) await create(c.text);
       }
-      const label = structure === 'phased' ? '（段階DAG）' : structure === 'serial' ? '（直列）' : '';
+      const label =
+        structure === 'ai'
+          ? '（AI生成グラフ）'
+          : structure === 'phased'
+            ? '（段階DAG）'
+            : structure === 'serial'
+              ? '（直列）'
+              : '';
       flash(`${chosen.length} 件のタスクを案件へ割り当てました${label}`);
       setCandidates([]);
       setDocName('');
@@ -185,6 +222,11 @@ export function DocumentIntake({
                   }
                   className="mt-1"
                 />
+                {c.ref !== undefined && (
+                  <span className="mt-0.5 shrink-0 font-mono text-[10px] text-slate-600" title="AI生成グラフのノード番号">
+                    #{c.ref}
+                  </span>
+                )}
                 <input
                   value={c.text}
                   onChange={(e) =>
@@ -192,6 +234,11 @@ export function DocumentIntake({
                   }
                   className="flex-1 bg-transparent text-xs focus:outline-none"
                 />
+                {c.deps && c.deps.length > 0 && (
+                  <span className="mt-0.5 shrink-0 text-[10px] text-accent" title="依存するノード">
+                    ←{c.deps.join(',')}
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -220,6 +267,7 @@ export function DocumentIntake({
                 onChange={(e) => setStructure(e.target.value as typeof structure)}
                 className="rounded-lg border border-edge bg-panel px-1.5 py-1 text-xs"
               >
+                <option value="ai">AI生成グラフ（依存自動）</option>
                 <option value="parallel">並列（独立）</option>
                 <option value="serial">直列（順次）</option>
                 <option value="phased">段階（フェーズDAG）</option>

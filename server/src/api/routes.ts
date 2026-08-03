@@ -9,7 +9,8 @@ import { tenancy } from '../tenancy/store.js';
 import { repoStore } from '../tenancy/repos.js';
 import { ROLE_LABEL } from '../auth/rbac.js';
 import { audit } from '../audit/log.js';
-import { planDocument } from '../intake/planner.js';
+import { planDocument, planGraph } from '../intake/planner.js';
+import { detectAgents } from '../agents/detect.js';
 import type { AgentKind, AuditEvent, CreateSessionInput, Role } from '../types.js';
 
 export function createRouter(sessions: SessionManager): Router {
@@ -174,6 +175,38 @@ export function createRouter(sessions: SessionManager): Router {
     const tasks = await planDocument(text, agent ?? 'claude');
     rec(req, 'intake.plan', 'success', null, `${tasks.length} tasks`);
     res.json({ tasks });
+  });
+
+  // ドキュメント → グラフ(DAG)としてタスク分解（グラフ・エンジニアリング）
+  router.post('/intake/graph', resolveWorkspace, requirePerm('session:create'), async (req, res) => {
+    const { text, agent } = req.body as { text?: string; agent?: AgentKind };
+    if (!text?.trim()) return res.status(400).json({ error: 'text は必須です' });
+    const nodes = await planGraph(text, agent ?? 'claude');
+    rec(req, 'intake.graph', 'success', null, `${nodes.length} nodes`);
+    res.json({ nodes });
+  });
+
+  // グラフGUIエディタ: 依存/条件/座標の更新
+  router.patch('/sessions/:id/graph', resolveWorkspace, requirePerm('session:create'), inWorkspace, (req, res) => {
+    const { dependsOn, dependsCondition, graphPos } = req.body as {
+      dependsOn?: string[];
+      dependsCondition?: 'success' | 'failure' | 'any';
+      graphPos?: { x: number; y: number };
+    };
+    const ok = sessions.updateGraph(req.params.id, { dependsOn, dependsCondition, graphPos });
+    if (dependsOn || dependsCondition) rec(req, 'graph.update', ok ? 'success' : 'error', req.params.id);
+    res.json({ ok });
+  });
+
+  // セッション横断検索
+  router.get('/search', resolveWorkspace, requirePerm('session:view'), (req, res) => {
+    const q = req.query.q?.toString() ?? '';
+    res.json({ results: sessions.search(q, req.workspaceId) });
+  });
+
+  // エージェント自動検出
+  router.get('/agents', resolveWorkspace, requirePerm('session:view'), async (_req, res) => {
+    res.json(await detectAgents());
   });
 
   // 監査ログ（owner/admin のみ）+ SIEM 状態

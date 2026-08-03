@@ -58,6 +58,26 @@ export interface Member {
   role: import('./auth').Role;
 }
 
+/** LLM プランナーが出力するグラフノード */
+export interface PlannedNode {
+  ref: number;
+  text: string;
+  deps: number[];
+}
+
+export interface DetectedAgent {
+  kind: AgentKind;
+  label: string;
+  command: string;
+  available: boolean;
+  version?: string;
+}
+
+export interface SearchHit {
+  session: SessionSummary;
+  hits: string[];
+}
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -67,6 +87,8 @@ export interface SessionSummary {
   workspaceId: string;
   repoId: string | null;
   dependsOn?: string[];
+  dependsCondition?: 'success' | 'failure' | 'any';
+  graphPos?: { x: number; y: number };
   violations: GuardrailViolation[];
   worktreePath: string | null;
   branch: string | null;

@@ -130,6 +130,13 @@ export interface Session {
   repoId: string | null;
   /** #1 依存タスク（この session ID 群が done になるまで開始しない） */
   dependsOn: string[];
+  /**
+   * 条件付きエッジ: 依存元の結果で分岐する。
+   * on='success'(既定)=依存が done で起動 / 'failure'=依存が error/stopped で起動 / 'any'=どちらでも
+   */
+  dependsCondition: 'success' | 'failure' | 'any';
+  /** グラフGUIエディタ用の座標（任意） */
+  graphPos?: { x: number; y: number };
   /** #20 ガードレール違反の履歴 */
   violations: GuardrailViolation[];
   /** 作業ブランチ名 */
@@ -183,4 +190,8 @@ export interface CreateSessionInput {
   repoId?: string;
   /** #1 依存タスク（これらが完了してから開始） */
   dependsOn?: string[];
+  /** 条件付きエッジ: success(既定) / failure / any */
+  dependsCondition?: 'success' | 'failure' | 'any';
+  /** グラフGUIエディタ用の座標 */
+  graphPos?: { x: number; y: number };
 }

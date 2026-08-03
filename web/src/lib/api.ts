@@ -1,5 +1,17 @@
 // REST API クライアント（デモモード時はブラウザ内バックエンドへ委譲）
-import type { AgentKind, AuditEvent, FinopsSummary, LogLine, Member, NotifyEvent, Repo, SessionSummary } from './types';
+import type {
+  AgentKind,
+  AuditEvent,
+  DetectedAgent,
+  FinopsSummary,
+  LogLine,
+  Member,
+  NotifyEvent,
+  PlannedNode,
+  Repo,
+  SearchHit,
+  SessionSummary,
+} from './types';
 import type { Role } from './auth';
 import { demoBackend, IS_DEMO } from './demo';
 import { store, type User, type WorkspaceInfo } from './auth';
@@ -62,6 +74,8 @@ export const api = {
     title?: string;
     repoId?: string;
     dependsOn?: string[];
+    dependsCondition?: 'success' | 'failure' | 'any';
+    graphPos?: { x: number; y: number };
   }) =>
     IS_DEMO
       ? Promise.resolve(demoBackend.createSessions(input, store.getWorkspace()))
@@ -168,6 +182,41 @@ export const api = {
       : req<{ siemConnected: boolean; events: AuditEvent[] }>(
           `/audit${action ? `?action=${encodeURIComponent(action)}` : ''}`
         ),
+
+  // ドキュメント → グラフ(DAG)分解。demo/失敗時は空→client がフォールバック
+  planGraph: (text: string, agent?: AgentKind) =>
+    IS_DEMO
+      ? Promise.resolve<{ nodes: PlannedNode[] }>({ nodes: [] })
+      : req<{ nodes: PlannedNode[] }>('/intake/graph', {
+          method: 'POST',
+          body: JSON.stringify({ text, agent }),
+        }).catch(() => ({ nodes: [] as PlannedNode[] })),
+
+  // グラフGUIエディタ: 依存/条件/座標の更新
+  updateGraph: (
+    id: string,
+    patch: {
+      dependsOn?: string[];
+      dependsCondition?: 'success' | 'failure' | 'any';
+      graphPos?: { x: number; y: number };
+    }
+  ) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.updateGraph(id, patch))
+      : req<{ ok: boolean }>(`/sessions/${id}/graph`, {
+          method: 'PATCH',
+          body: JSON.stringify(patch),
+        }),
+
+  // セッション横断検索
+  search: (q: string) =>
+    IS_DEMO
+      ? Promise.resolve({ results: demoBackend.search(q, store.getWorkspace()) })
+      : req<{ results: SearchHit[] }>(`/search?q=${encodeURIComponent(q)}`),
+
+  // エージェント自動検出
+  detectAgents: () =>
+    IS_DEMO ? Promise.resolve(demoBackend.detectAgents()) : req<DetectedAgent[]>('/agents'),
 
   // メンバー管理
   listMembers: () =>

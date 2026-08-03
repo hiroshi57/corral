@@ -1,6 +1,6 @@
 // 司令塔ペイン：新規タスク投入 + 一斉指示(broadcast)
 import { useEffect, useState } from 'react';
-import type { AgentKind, Repo } from '../lib/types';
+import type { AgentKind, DetectedAgent, Repo } from '../lib/types';
 import { AGENT_LABEL } from '../lib/types';
 import { api } from '../lib/api';
 
@@ -22,10 +22,29 @@ export function CommandDeck({
   const [count, setCount] = useState(1);
   const [autoAccept, setAutoAccept] = useState(false);
   const [repoId, setRepoId] = useState<string>('');
+  // エージェント自動検出
+  const [detected, setDetected] = useState<DetectedAgent[]>([]);
 
   useEffect(() => {
     if (repos.length && !repos.find((r) => r.id === repoId)) setRepoId(repos[0].id);
   }, [repos]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    api
+      .detectAgents()
+      .then((d) => {
+        setDetected(d);
+        // 未インストールが選択されていたら、利用可能な先頭へ切替
+        const cur = d.find((x) => x.kind === agent);
+        if (cur && !cur.available) {
+          const first = d.find((x) => x.available && x.kind !== 'custom');
+          if (first) setAgent(first.kind);
+        }
+      })
+      .catch(() => setDetected([]));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const availabilityOf = (k: AgentKind) => detected.find((d) => d.kind === k);
   const [broadcastText, setBroadcastText] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -94,11 +113,17 @@ export function CommandDeck({
             onChange={(e) => setAgent(e.target.value as AgentKind)}
             className="bg-panel border border-edge rounded-lg px-2 py-1 text-sm"
           >
-            {AGENTS.map((a) => (
-              <option key={a} value={a}>
-                {AGENT_LABEL[a]}
-              </option>
-            ))}
+            {AGENTS.map((a) => {
+              const d = availabilityOf(a);
+              const mark = !d ? '' : d.available ? '● ' : '○ ';
+              return (
+                <option key={a} value={a}>
+                  {mark}
+                  {AGENT_LABEL[a]}
+                  {d && !d.available ? '（未検出）' : ''}
+                </option>
+              );
+            })}
           </select>
           {repos.length > 0 && (
             <select

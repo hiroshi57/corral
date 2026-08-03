@@ -10,6 +10,7 @@ import { WorkspaceBar } from './components/WorkspaceBar';
 import { AuditView } from './components/AuditView';
 import { MembersView } from './components/MembersView';
 import { TaskGraph } from './components/TaskGraph';
+import { SearchBar } from './components/SearchBar';
 import { Login } from './components/Login';
 import { api } from './lib/api';
 import { connectWs } from './lib/ws';
@@ -259,6 +260,12 @@ export default function App() {
         </div>
 
         <div className="ml-auto flex items-center gap-3">
+          <SearchBar
+            onSelect={(id) => {
+              setView('command');
+              setSelected(id);
+            }}
+          />
           <div className="hidden items-center gap-3 text-xs lg:flex">
             {STATUS_ORDER.map((st) =>
               counts[st] ? (
@@ -296,6 +303,8 @@ export default function App() {
           <TaskGraph
             sessions={wsSessions}
             selected={selected}
+            canEdit={canCreate}
+            onChanged={refresh}
             onSelect={(id) => {
               setView('command');
               setSelected(id);

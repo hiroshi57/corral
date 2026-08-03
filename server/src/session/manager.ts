@@ -94,6 +94,8 @@ export class SessionManager extends EventEmitter {
       workspaceId,
       repoId: input.repoId ?? null,
       dependsOn: input.dependsOn ?? [],
+      dependsCondition: input.dependsCondition ?? 'success',
+      graphPos: input.graphPos,
       violations: [],
       worktreePath: null,
       branch: null,
@@ -164,12 +166,22 @@ export class SessionManager extends EventEmitter {
     return repo?.path ?? config.repoRoot;
   }
 
-  /** #1 依存タスクがすべて done か */
+  /**
+   * #1/条件付きエッジ: 依存タスクが条件を満たしたか。
+   * success=done / failure=error|stopped / any=いずれかの終端状態
+   */
   private depsSatisfied(session: Session): boolean {
-    return session.dependsOn.every((depId) => this.sessions.get(depId)?.status === 'done');
+    const cond = session.dependsCondition ?? 'success';
+    return session.dependsOn.every((depId) => {
+      const st = this.sessions.get(depId)?.status;
+      if (!st) return false;
+      if (cond === 'success') return st === 'done';
+      if (cond === 'failure') return st === 'error' || st === 'stopped';
+      return st === 'done' || st === 'error' || st === 'stopped'; // any
+    });
   }
 
-  /** #1 依存が満たされた待機中タスクを起動する */
+  /** 依存が満たされた待機中タスクを起動する */
   private promoteReady(): void {
     for (const s of this.sessions.values()) {
       if (
@@ -179,10 +191,64 @@ export class SessionManager extends EventEmitter {
         s.dependsOn.length > 0 &&
         this.depsSatisfied(s)
       ) {
-        this.appendLog(s, 'system', '依存タスクが完了。開始します。');
+        this.appendLog(
+          s,
+          'system',
+          `依存条件（${s.dependsCondition ?? 'success'}）を満たしました。開始します。`
+        );
         this.startRun(s, s.prompt, false);
       }
     }
+  }
+
+  /** グラフGUIエディタ: 依存/条件/座標を更新 */
+  updateGraph(
+    id: string,
+    patch: { dependsOn?: string[]; dependsCondition?: Session['dependsCondition']; graphPos?: { x: number; y: number } }
+  ): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (patch.dependsOn) {
+      // 自己参照と循環を防ぐ
+      const filtered = patch.dependsOn.filter((d) => d !== id && !this.wouldCycle(id, d));
+      s.dependsOn = filtered;
+    }
+    if (patch.dependsCondition) s.dependsCondition = patch.dependsCondition;
+    if (patch.graphPos) s.graphPos = patch.graphPos;
+    s.updatedAt = Date.now();
+    this.emitUpdate(s);
+    this.promoteReady();
+    return true;
+  }
+
+  /** target が dep に依存すると循環するか（dep から target へ到達可能か） */
+  private wouldCycle(target: string, dep: string, seen = new Set<string>()): boolean {
+    if (dep === target) return true;
+    if (seen.has(dep)) return false;
+    seen.add(dep);
+    const d = this.sessions.get(dep);
+    return (d?.dependsOn ?? []).some((x) => this.wouldCycle(target, x, seen));
+  }
+
+  /** セッション横断検索（タイトル/プロンプト/ログ） */
+  search(query: string, workspaceId?: string): Array<{ session: SessionSummary; hits: string[] }> {
+    const q = query.toLowerCase();
+    if (!q) return [];
+    const out: Array<{ session: SessionSummary; hits: string[] }> = [];
+    for (const s of this.sessions.values()) {
+      if (workspaceId && s.workspaceId !== workspaceId) continue;
+      const hits: string[] = [];
+      if (s.title.toLowerCase().includes(q)) hits.push(`タイトル: ${s.title}`);
+      for (const t of s.turns) if (t.toLowerCase().includes(q)) hits.push(`指示: ${t.slice(0, 120)}`);
+      for (const l of s.logs) {
+        if (l.text.toLowerCase().includes(q)) {
+          hits.push(`ログ: ${l.text.slice(0, 120)}`);
+          if (hits.length > 6) break;
+        }
+      }
+      if (hits.length) out.push({ session: toSummary(s), hits: hits.slice(0, 6) });
+    }
+    return out.slice(0, 50);
   }
 
   /**
@@ -407,8 +473,8 @@ export class SessionManager extends EventEmitter {
     if (config.notify.events.includes(status)) {
       void this.dispatchNotify(session);
     }
-    // #1 完了したら依存待ちタスクを起動
-    if (status === 'done') this.promoteReady();
+    // 終端状態になったら依存待ちタスクを起動（条件付きエッジ: success/failure/any）
+    if (status === 'done' || status === 'error' || status === 'stopped') this.promoteReady();
   }
 
   private async dispatchNotify(session: Session): Promise<void> {
