@@ -31,6 +31,9 @@ export function DetailPanel({
   // #24 セッションリプレイ
   const [replaying, setReplaying] = useState(false);
   const [replayCount, setReplayCount] = useState(0);
+  // ④ PR 自動作成
+  const [prBusy, setPrBusy] = useState(false);
+  const [prMsg, setPrMsg] = useState<{ ok: boolean; text: string; url?: string } | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -80,6 +83,22 @@ export function DetailPanel({
     await api.instruct(session.id, body);
     setComments([]);
     onChanged();
+  };
+
+  const createPr = async () => {
+    setPrBusy(true);
+    setPrMsg(null);
+    try {
+      const r = await api.createPr(session.id);
+      setPrMsg({
+        ok: r.ok,
+        text: r.ok ? 'PR を作成しました' : `PR 作成失敗: ${r.error ?? '不明なエラー'}`,
+        url: r.url,
+      });
+      onChanged();
+    } finally {
+      setPrBusy(false);
+    }
   };
 
   const approve = async () => {
@@ -222,6 +241,23 @@ export function DetailPanel({
         </div>
       )}
 
+      {/* ④ PR 結果 */}
+      {prMsg && (
+        <div
+          className={`border-t px-3 py-2 text-xs ${
+            prMsg.ok ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+          }`}
+        >
+          {prMsg.text}
+          {prMsg.url && (
+            <a href={prMsg.url} target="_blank" rel="noreferrer" className="ml-2 underline">
+              {prMsg.url}
+            </a>
+          )}
+          <button onClick={() => setPrMsg(null)} className="ml-2 opacity-60 hover:opacity-100">✕</button>
+        </div>
+      )}
+
       {/* アクション */}
       <div className="border-t border-edge p-3 flex flex-col gap-2">
         <div className="flex gap-2">
@@ -249,6 +285,14 @@ export function DetailPanel({
             className="bg-emerald-500/90 text-black font-bold rounded-lg px-3 py-1.5 text-sm disabled:opacity-40"
           >
             ✓ 承認してcommit
+          </button>
+          <button
+            onClick={createPr}
+            disabled={!canApprove || prBusy}
+            title="変更を push して Pull Request を作成（要 gh CLI）"
+            className="bg-panel border border-edge rounded-lg px-3 py-1.5 text-sm hover:border-accent disabled:opacity-40"
+          >
+            {prBusy ? '…' : '⇪ PR作成'}
           </button>
           <button
             onClick={() => api.stop(session.id).then(onChanged)}

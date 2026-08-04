@@ -17,6 +17,8 @@ import { notify } from '../notify/notifier.js';
 import { repoStore } from '../tenancy/repos.js';
 import { checkPrompt, scanSecrets, checkChanges } from '../guardrails/policy.js';
 import { audit } from '../audit/log.js';
+import { assignAgent } from '../agents/assign.js';
+import type { Playbook } from '../types.js';
 import type {
   AgentKind,
   CreateSessionInput,
@@ -131,9 +133,15 @@ export class SessionManager extends EventEmitter {
       session.worktreePath = worktreePath;
       session.branch = branch;
       this.appendLog(session, 'system', `worktree を作成: ${branch}（repo: ${repo?.name ?? 'default'}）`);
-      // #1 依存タスクが未完了なら待機（queued のまま）。完了時に promoteReady で起動
+      // #1 依存待ち / ③ 実行スロット待ち は queued のまま（promoteReady が後で起動）
       if (!this.depsSatisfied(session)) {
         this.appendLog(session, 'system', `依存タスクの完了待ち: ${session.dependsOn.join(', ')}`);
+      } else if (!this.hasSlot()) {
+        this.appendLog(
+          session,
+          'system',
+          `実行キュー待ち（同時実行上限 ${config.queue.maxConcurrent}）`
+        );
       } else {
         this.startRun(session, session.prompt, false);
       }
@@ -181,24 +189,97 @@ export class SessionManager extends EventEmitter {
     });
   }
 
-  /** 依存が満たされた待機中タスクを起動する */
+  /** ③ 実行キュー上限: 現在の同時実行数 */
+  private runningCount(): number {
+    return this.runners.size;
+  }
+
+  /** ③ 空きスロットがあるか（0=無制限） */
+  private hasSlot(): boolean {
+    const max = config.queue.maxConcurrent;
+    return !max || this.runningCount() < max;
+  }
+
+  /**
+   * 待機中タスクを起動する。
+   * - 依存条件（success/failure/any）を満たしている
+   * - ③ 実行キューに空きスロットがある
+   * 依存のないタスクもスロット待ちで queued に留まるため、ここで拾う。
+   */
   private promoteReady(): void {
-    for (const s of this.sessions.values()) {
-      if (
-        s.status === 'queued' &&
-        s.worktreePath &&
-        !this.runners.has(s.id) &&
-        s.dependsOn.length > 0 &&
-        this.depsSatisfied(s)
-      ) {
-        this.appendLog(
-          s,
-          'system',
-          `依存条件（${s.dependsCondition ?? 'success'}）を満たしました。開始します。`
-        );
-        this.startRun(s, s.prompt, false);
+    const waiting = [...this.sessions.values()]
+      .filter(
+        (s) =>
+          s.status === 'queued' &&
+          s.worktreePath &&
+          !this.runners.has(s.id) &&
+          this.depsSatisfied(s)
+      )
+      .sort((a, b) => a.createdAt - b.createdAt); // 先に作られたものを優先
+
+    for (const s of waiting) {
+      if (!this.hasSlot()) break;
+      this.appendLog(
+        s,
+        'system',
+        s.dependsOn.length
+          ? `依存条件（${s.dependsCondition ?? 'success'}）を満たしました。開始します。`
+          : '実行スロットが空きました。開始します。'
+      );
+      this.startRun(s, s.prompt, false);
+    }
+  }
+
+  /**
+   * ① プレイブック（グラフテンプレ）を展開して実行する。
+   * ref → 実 session ID を解決し、トポロジカル順に生成して DAG を再構築。
+   * ② agent 未指定のノードは内容から自動割当。
+   */
+  async runPlaybook(
+    pb: Playbook,
+    workspaceId: string,
+    opts: { agent?: AgentKind; repoId?: string; autoAccept?: boolean }
+  ): Promise<SessionSummary[]> {
+    if (this.budgetBlocked()) {
+      this.checkBudget();
+      throw new Error('予算上限（ハードキャップ）に達したため実行できません');
+    }
+
+    const refToId = new Map<number, string>();
+    const created: SessionSummary[] = [];
+    const pending = [...pb.nodes];
+    let guard = 0;
+
+    while (pending.length && guard++ < 200) {
+      // 依存が解決済みのノードから作る（未知の ref への依存は無視）
+      const idx = pending.findIndex((n) =>
+        n.deps.every((d) => refToId.has(d) || !pb.nodes.some((x) => x.ref === d))
+      );
+      const node = pending.splice(idx >= 0 ? idx : 0, 1)[0];
+      const deps = node.deps.map((d) => refToId.get(d)).filter((x): x is string => !!x);
+      // ② エージェント自動割当（明示指定 > テンプレ指定 > 内容から推定）
+      const agent = await assignAgent(node.text, opts.agent ?? node.agent);
+
+      const summaries = await this.createBatch(
+        {
+          agent,
+          prompt: node.text,
+          count: 1,
+          autoAccept: opts.autoAccept,
+          repoId: opts.repoId,
+          title: node.text.slice(0, 40),
+          dependsOn: deps,
+          dependsCondition: node.condition ?? 'success',
+        },
+        workspaceId
+      );
+      const s = summaries[0];
+      if (s) {
+        refToId.set(node.ref, s.id);
+        created.push(s);
       }
     }
+    return created;
   }
 
   /** グラフGUIエディタ: 依存/条件/座標を更新 */
@@ -313,6 +394,8 @@ export class SessionManager extends EventEmitter {
       } else {
         this.setStatus(session, 'needs_review');
       }
+      // ③ スロットが空いたので待機中タスクを起動（needs_review でも解放される）
+      this.promoteReady();
     });
   }
 

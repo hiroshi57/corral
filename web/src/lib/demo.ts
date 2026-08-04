@@ -15,7 +15,7 @@ import type {
   SessionSummary,
   Usage,
 } from './types';
-import type { AuditEvent, DetectedAgent, Member, SearchHit } from './types';
+import type { AuditEvent, DetectedAgent, Member, Playbook, SearchHit } from './types';
 import type { Role, User, WorkspaceInfo } from './auth';
 
 // #20 デモ用ガードレール（サーバの denyCommands と同等の代表例）
@@ -55,6 +55,17 @@ const PRICING: Record<AgentKind, { i: number; o: number }> = {
 };
 
 const NOTIFY_EVENTS: SessionStatus[] = ['needs_review', 'done', 'error', 'stopped'];
+
+// ③ デモの同時実行上限
+const MAX_CONCURRENT = 3;
+
+// ② エージェント自動割当（サーバの assign.ts と同じ方針の簡易版）
+function autoAssign(text: string): AgentKind {
+  if (/テスト|検証|回帰|E2E|ユニット|品質|lint|CI/.test(text)) return 'codex';
+  if (/ドキュメント|README|手順|マニュアル|説明|記載|共有|報告/.test(text)) return 'gemini';
+  if (/実装|修正|追加|作成|対応|改善|構築|移行|削除|最適化/.test(text)) return 'codex';
+  return 'claude'; // 調査・設計・レビュー・一般
+}
 
 let counter = 0;
 const id8 = () => `d${(++counter).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -235,9 +246,14 @@ class DemoBackend {
       const repoName = this.repos.find((r) => r.id === s.repoId)?.name ?? 'default';
       this.log(s, 'system', `worktree を作成: ${s.branch}（repo: ${repoName}）`);
       this.recordAudit('session.create', 'success', s.id, input.prompt.slice(0, 60));
-      // #1 依存タスク未完了なら待機
-      if (this.depsSatisfied(s)) this.run(s, input.prompt, false);
-      else this.log(s, 'system', `依存タスクの完了待ち: ${s.dependsOn?.join(', ')}`);
+      // #1 依存待ち / ③ 実行スロット待ちは queued のまま
+      if (!this.depsSatisfied(s)) {
+        this.log(s, 'system', `依存タスクの完了待ち: ${s.dependsOn?.join(', ')}`);
+      } else if (!this.hasSlot()) {
+        this.log(s, 'system', `実行キュー待ち（同時実行上限 ${MAX_CONCURRENT}）`);
+      } else {
+        this.run(s, input.prompt, false);
+      }
       created.push(toSummary(s));
     }
     return created;
@@ -306,6 +322,132 @@ class DemoBackend {
     return out.slice(0, 50);
   }
 
+  // ① プレイブック（デモ用プリセット + 保存）
+  private playbooks: Playbook[] = [
+    {
+      id: 'pb-feature',
+      name: '新機能開発（調査→設計→実装→テスト）',
+      description: '調査と設計を並列で行い、実装で合流、最後にテストとドキュメント',
+      workspaceId: null,
+      builtin: true,
+      createdAt: 0,
+      nodes: [
+        { ref: 1, text: '既存コードと関連仕様を調査し、影響範囲をまとめる', deps: [] },
+        { ref: 2, text: 'データ構造とAPIインターフェースを設計する', deps: [] },
+        { ref: 3, text: '設計に基づいて機能を実装する', deps: [1, 2] },
+        { ref: 4, text: 'ユニットテストと結合テストを追加する', deps: [3] },
+        { ref: 5, text: 'README とドキュメントを更新する', deps: [3] },
+      ],
+    },
+    {
+      id: 'pb-bugfix',
+      name: 'バグ修正（再現→原因→修正→回帰テスト）',
+      description: '再現手順の確立から回帰テストまで。修正失敗時のリカバリ経路つき',
+      workspaceId: null,
+      builtin: true,
+      createdAt: 0,
+      nodes: [
+        { ref: 1, text: 'バグを再現する最小手順とテストを作成する', deps: [] },
+        { ref: 2, text: '原因を特定し、根本原因を説明する', deps: [1] },
+        { ref: 3, text: '原因に対する修正を実装する', deps: [2] },
+        { ref: 4, text: '回帰テストを追加し、既存テストが通ることを確認する', deps: [3] },
+        { ref: 5, text: '修正が失敗した場合、別アプローチを検討して再試行する', deps: [3], condition: 'failure' },
+      ],
+    },
+    {
+      id: 'pb-refactor',
+      name: 'リファクタリング（棚卸し→分割実施→検証）',
+      description: '対象の棚卸し後、複数箇所を並列で改善し、最後に検証で合流',
+      workspaceId: null,
+      builtin: true,
+      createdAt: 0,
+      nodes: [
+        { ref: 1, text: 'リファクタリング対象を棚卸しし、優先順位をつける', deps: [] },
+        { ref: 2, text: '重複コードを共通化する', deps: [1] },
+        { ref: 3, text: '命名と型定義を整理する', deps: [1] },
+        { ref: 4, text: '全体のテストを実行し、挙動が変わらないことを検証する', deps: [2, 3] },
+      ],
+    },
+  ];
+
+  listPlaybooks(): Playbook[] {
+    const ws = this.workspaces[0]?.id ?? 'default';
+    return this.playbooks.filter((p) => p.workspaceId === null || p.workspaceId === ws);
+  }
+
+  savePlaybook(name: string, description?: string, sessionIds?: string[]): Playbook {
+    const targets = (sessionIds?.length
+      ? sessionIds.map((id) => this.sessions.get(id)).filter((s): s is DemoSession => !!s)
+      : [...this.sessions.values()]);
+    const idToRef = new Map<string, number>();
+    targets.forEach((s, i) => idToRef.set(s.id, i + 1));
+    const pb: Playbook = {
+      id: id8(),
+      name,
+      description,
+      workspaceId: this.workspaces[0]?.id ?? 'default',
+      createdAt: Date.now(),
+      nodes: targets.map((s) => ({
+        ref: idToRef.get(s.id)!,
+        text: s.turns[0] ?? s.prompt,
+        deps: (s.dependsOn ?? []).map((d) => idToRef.get(d)).filter((x): x is number => x !== undefined),
+        agent: s.agent,
+        condition: s.dependsCondition,
+      })),
+    };
+    this.playbooks.push(pb);
+    this.recordAudit('playbook.create', 'success', pb.id, `${pb.nodes.length} nodes`);
+    return pb;
+  }
+
+  deletePlaybook(id: string): { ok: boolean } {
+    const p = this.playbooks.find((x) => x.id === id);
+    if (!p || p.builtin) return { ok: false };
+    this.playbooks = this.playbooks.filter((x) => x.id !== id);
+    return { ok: true };
+  }
+
+  /** ① プレイブックを展開して実行（② エージェント自動割当つき） */
+  runPlaybook(
+    id: string,
+    opts: { agent?: AgentKind; repoId?: string; autoAccept?: boolean },
+    workspaceId = 'default'
+  ): SessionSummary[] {
+    const pb = this.playbooks.find((p) => p.id === id);
+    if (!pb) return [];
+    const refToId = new Map<number, string>();
+    const created: SessionSummary[] = [];
+    const pending = [...pb.nodes];
+    let guard = 0;
+    while (pending.length && guard++ < 200) {
+      const idx = pending.findIndex((n) =>
+        n.deps.every((d) => refToId.has(d) || !pb.nodes.some((x) => x.ref === d))
+      );
+      const node = pending.splice(idx >= 0 ? idx : 0, 1)[0];
+      const deps = node.deps.map((d) => refToId.get(d)).filter((x): x is string => !!x);
+      const agent = opts.agent ?? node.agent ?? autoAssign(node.text);
+      const [s] = this.createSessions(
+        {
+          agent,
+          prompt: node.text,
+          count: 1,
+          autoAccept: opts.autoAccept,
+          repoId: opts.repoId,
+          title: node.text.slice(0, 40),
+          dependsOn: deps,
+          dependsCondition: node.condition ?? 'success',
+        },
+        workspaceId
+      );
+      if (s) {
+        refToId.set(node.ref, s.id);
+        created.push(s);
+      }
+    }
+    this.recordAudit('playbook.run', 'success', pb.id, `${created.length} sessions`);
+    return created;
+  }
+
   /** エージェント自動検出（デモは全て利用可能として表示） */
   detectAgents(): DetectedAgent[] {
     return (['claude', 'codex', 'gemini', 'aider'] as const).map((kind) => ({
@@ -316,12 +458,23 @@ class DemoBackend {
       version: 'demo',
     }));
   }
+  /** ③ 実行中の数（running なセッション） */
+  private hasSlot(): boolean {
+    return [...this.sessions.values()].filter((s) => s.status === 'running').length < MAX_CONCURRENT;
+  }
+
   private promoteReady(): void {
-    for (const s of this.sessions.values()) {
-      if (s.status === 'queued' && (s.dependsOn?.length ?? 0) > 0 && this.depsSatisfied(s)) {
-        this.log(s, 'system', '依存タスクが完了。開始します。');
-        this.run(s, s.prompt, false);
-      }
+    const waiting = [...this.sessions.values()]
+      .filter((s) => s.status === 'queued' && this.depsSatisfied(s))
+      .sort((a, b) => a.createdAt - b.createdAt);
+    for (const s of waiting) {
+      if (!this.hasSlot()) break;
+      this.log(
+        s,
+        'system',
+        (s.dependsOn?.length ?? 0) > 0 ? '依存タスクが完了。開始します。' : '実行スロットが空きました。開始します。'
+      );
+      this.run(s, s.prompt, false);
     }
   }
 
@@ -437,6 +590,7 @@ class DemoBackend {
     }
     if (s.autoAccept) this.approve(s.id);
     else this.setStatus(s, 'needs_review');
+    this.promoteReady(); // ③ スロット解放
   }
 
   private setStatus(s: DemoSession, status: SessionStatus): void {

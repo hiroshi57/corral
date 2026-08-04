@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CommandDeck } from './components/CommandDeck';
 import { DocumentIntake } from './components/DocumentIntake';
+import { Playbooks } from './components/Playbooks';
 import { WorkerCard } from './components/WorkerCard';
 import { DetailPanel } from './components/DetailPanel';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -36,6 +37,7 @@ export default function App() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [execMode, setExecMode] = useState('local');
   const [guardrailsOn, setGuardrailsOn] = useState(false);
+  const [maxConcurrent, setMaxConcurrent] = useState(0);
 
   // ⑤/④ 認証・案件
   const [authReady, setAuthReady] = useState(false);
@@ -87,6 +89,7 @@ export default function App() {
       setChannels(h.notifyChannels ?? []);
       setExecMode(h.execMode ?? 'local');
       setGuardrailsOn(!!h.guardrails);
+      setMaxConcurrent(h.maxConcurrent ?? 0);
     }).catch(() => {});
     initAuth().then(loadRepos);
     const disconnect = connectWs((e) => {
@@ -240,6 +243,14 @@ export default function App() {
             🛡 ガードレール
           </span>
         )}
+        {maxConcurrent > 0 && (
+          <span
+            className="rounded border border-edge bg-panel2 px-2 py-0.5 text-[10px] text-slate-400"
+            title="同時実行上限（超過分はキュー待ち）"
+          >
+            ⚙ 同時 {counts.running ?? 0}/{maxConcurrent}
+          </span>
+        )}
         <WorkspaceBar
           workspaces={workspaces}
           currentWs={currentWs}
@@ -324,6 +335,12 @@ export default function App() {
           <div className="flex w-[420px] shrink-0 flex-col gap-3 overflow-auto border-r border-edge p-4">
             <CommandDeck onChanged={refresh} repos={repos} canCreate={canCreate} canInstruct={canInstruct} />
             <DocumentIntake onChanged={refresh} repos={repos} canCreate={canCreate} />
+            <Playbooks
+              onChanged={refresh}
+              repos={repos}
+              hasSessions={wsSessions.length > 0}
+              canCreate={canCreate}
+            />
             {!canCreate && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
                 現在のロール（{ROLE_LABEL[role]}）ではタスク起動・指示ができません。閲覧のみ可能です。

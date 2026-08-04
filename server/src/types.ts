@@ -70,6 +70,30 @@ export interface Identity {
   machine: boolean;
 }
 
+/** #2 プレイブック: グラフ(DAG)のテンプレート */
+export interface PlaybookNode {
+  /** テンプレ内の一時ID */
+  ref: number;
+  text: string;
+  /** 依存する ref 群 */
+  deps: number[];
+  /** 指定があればこのエージェントで実行 */
+  agent?: AgentKind;
+  /** 条件付きエッジ */
+  condition?: 'success' | 'failure' | 'any';
+}
+
+export interface Playbook {
+  id: string;
+  name: string;
+  description?: string;
+  /** 作成元の案件（null=全案件で共有のプリセット） */
+  workspaceId: string | null;
+  nodes: PlaybookNode[];
+  createdAt: number;
+  builtin?: boolean;
+}
+
 /** #4 マルチリポ: 案件が抱える対象リポジトリ */
 export interface Repo {
   id: string;

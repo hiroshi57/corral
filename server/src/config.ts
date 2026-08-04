@@ -87,6 +87,12 @@ export const config = {
     maxInMemory: Number(process.env.CORRAL_AUDIT_MEM ?? 5000),
   },
 
+  // --- ③ 実行キュー上限（同時実行数の制御） ---
+  queue: {
+    /** 同時に running にできる最大数（0=無制限） */
+    maxConcurrent: Number(process.env.CORRAL_MAX_CONCURRENT ?? 3),
+  },
+
   // --- #20 ポリシーガードレール ---
   guardrails: {
     enabled: process.env.CORRAL_GUARDRAILS !== '0',

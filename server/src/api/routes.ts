@@ -11,6 +11,9 @@ import { ROLE_LABEL } from '../auth/rbac.js';
 import { audit } from '../audit/log.js';
 import { planDocument, planGraph } from '../intake/planner.js';
 import { detectAgents } from '../agents/detect.js';
+import { playbooks } from '../playbooks/store.js';
+import { createPullRequest, ghAvailable } from '../git/pr.js';
+import type { PlaybookNode } from '../types.js';
 import type { AgentKind, AuditEvent, CreateSessionInput, Role } from '../types.js';
 
 export function createRouter(sessions: SessionManager): Router {
@@ -45,6 +48,7 @@ export function createRouter(sessions: SessionManager): Router {
       budgetUsd: config.finops.budgetUsd,
       execMode: config.exec.mode,
       guardrails: config.guardrails.enabled,
+      maxConcurrent: config.queue.maxConcurrent,
     });
   });
 
@@ -195,6 +199,76 @@ export function createRouter(sessions: SessionManager): Router {
     };
     const ok = sessions.updateGraph(req.params.id, { dependsOn, dependsCondition, graphPos });
     if (dependsOn || dependsCondition) rec(req, 'graph.update', ok ? 'success' : 'error', req.params.id);
+    res.json({ ok });
+  });
+
+  // ④ PR 自動作成（#7）
+  router.post('/sessions/:id/pr', resolveWorkspace, requirePerm('session:approve'), inWorkspace, async (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s) return res.status(404).json({ error: 'not found' });
+    const { title, draft, base } = req.body as { title?: string; draft?: boolean; base?: string };
+    const r = await createPullRequest(s, { title, draft, base });
+    rec(req, 'pr.create', r.ok ? 'success' : 'error', req.params.id, r.url ?? r.error);
+    res.status(r.ok ? 201 : 400).json(r);
+  });
+
+  // PR 機能の利用可否（gh CLI 検出）
+  router.get('/pr/available', resolveWorkspace, requirePerm('session:view'), async (_req, res) => {
+    res.json({ available: await ghAvailable() });
+  });
+
+  // ---- #2 プレイブック（グラフのテンプレ保存/再利用） ----
+  router.get('/playbooks', resolveWorkspace, requirePerm('session:view'), (req, res) => {
+    res.json(playbooks.listFor(req.workspaceId!));
+  });
+
+  // 現在の案件のグラフをテンプレとして保存（sessionIds 未指定なら案件全体）
+  router.post('/playbooks', resolveWorkspace, requirePerm('session:create'), (req, res) => {
+    const { name, description, sessionIds, nodes } = req.body as {
+      name?: string;
+      description?: string;
+      sessionIds?: string[];
+      nodes?: PlaybookNode[];
+    };
+    if (!name?.trim()) return res.status(400).json({ error: 'name は必須です' });
+
+    let pb;
+    if (nodes?.length) {
+      pb = playbooks.create({ name: name.trim(), description, workspaceId: req.workspaceId!, nodes });
+    } else {
+      const targets = (sessionIds?.length
+        ? sessionIds.map((id) => sessions.get(id)).filter((s) => !!s && s.workspaceId === req.workspaceId)
+        : sessions.list(req.workspaceId).map((s) => sessions.get(s.id))
+      ).filter((s): s is NonNullable<typeof s> => !!s);
+      if (!targets.length) return res.status(400).json({ error: '保存対象のタスクがありません' });
+      pb = playbooks.captureFromSessions(name.trim(), description, req.workspaceId!, targets);
+    }
+    rec(req, 'playbook.create', 'success', pb.id, `${pb.nodes.length} nodes`);
+    res.status(201).json(pb);
+  });
+
+  // プレイブックを展開して実行（DAG を再構築）
+  router.post('/playbooks/:id/run', resolveWorkspace, requirePerm('session:create'), async (req, res) => {
+    const pb = playbooks.get(req.params.id);
+    if (!pb) return res.status(404).json({ error: 'プレイブックが見つかりません' });
+    const { agent, repoId, autoAccept } = req.body as {
+      agent?: AgentKind;
+      repoId?: string;
+      autoAccept?: boolean;
+    };
+    try {
+      const created = await sessions.runPlaybook(pb, req.workspaceId!, { agent, repoId, autoAccept });
+      rec(req, 'playbook.run', 'success', pb.id, `${created.length} sessions`);
+      res.status(201).json(created);
+    } catch (e) {
+      rec(req, 'playbook.run', 'error', pb.id, (e as Error).message);
+      res.status(402).json({ error: (e as Error).message });
+    }
+  });
+
+  router.delete('/playbooks/:id', resolveWorkspace, requirePerm('workspace:manage'), (req, res) => {
+    const ok = playbooks.remove(req.params.id);
+    rec(req, 'playbook.delete', ok ? 'success' : 'denied', req.params.id);
     res.json({ ok });
   });
 

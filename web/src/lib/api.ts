@@ -7,6 +7,7 @@ import type {
   LogLine,
   Member,
   NotifyEvent,
+  Playbook,
   PlannedNode,
   Repo,
   SearchHit,
@@ -45,6 +46,7 @@ export const api = {
           budgetUsd: 0,
           execMode: 'local',
           guardrails: true,
+          maxConcurrent: 3,
         })
       : req<{
           ok: boolean;
@@ -54,6 +56,7 @@ export const api = {
           budgetUsd?: number;
           execMode?: string;
           guardrails?: boolean;
+          maxConcurrent?: number;
         }>('/health'),
 
   listSessions: () =>
@@ -207,6 +210,51 @@ export const api = {
           method: 'PATCH',
           body: JSON.stringify(patch),
         }),
+
+  // #2 プレイブック（グラフのテンプレ保存/再利用）
+  listPlaybooks: () =>
+    IS_DEMO ? Promise.resolve(demoBackend.listPlaybooks()) : req<Playbook[]>('/playbooks'),
+
+  savePlaybook: (name: string, description?: string, sessionIds?: string[]) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.savePlaybook(name, description, sessionIds))
+      : req<Playbook>('/playbooks', {
+          method: 'POST',
+          body: JSON.stringify({ name, description, sessionIds }),
+        }),
+
+  runPlaybook: (id: string, opts: { agent?: AgentKind; repoId?: string; autoAccept?: boolean }) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.runPlaybook(id, opts, store.getWorkspace()))
+      : req<SessionSummary[]>(`/playbooks/${id}/run`, {
+          method: 'POST',
+          body: JSON.stringify(opts),
+        }),
+
+  deletePlaybook: (id: string) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.deletePlaybook(id))
+      : req<{ ok: boolean }>(`/playbooks/${id}`, { method: 'DELETE' }),
+
+  // ④ PR 自動作成
+  prAvailable: () =>
+    IS_DEMO
+      ? Promise.resolve({ available: false })
+      : req<{ available: boolean }>('/pr/available').catch(() => ({ available: false })),
+
+  createPr: (
+    id: string,
+    opts: { title?: string; draft?: boolean; base?: string } = {}
+  ): Promise<{ ok: boolean; url?: string; error?: string }> =>
+    IS_DEMO
+      ? Promise.resolve({
+          ok: false,
+          error: 'DEMO モードでは PR を作成しません（ローカル実行時に有効）',
+        })
+      : req<{ ok: boolean; url?: string; error?: string }>(`/sessions/${id}/pr`, {
+          method: 'POST',
+          body: JSON.stringify(opts),
+        }).catch((e: Error) => ({ ok: false, error: e.message })),
 
   // セッション横断検索
   search: (q: string) =>

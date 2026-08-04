@@ -58,6 +58,24 @@ export interface Member {
   role: import('./auth').Role;
 }
 
+/** #2 プレイブック（グラフテンプレ） */
+export interface PlaybookNode {
+  ref: number;
+  text: string;
+  deps: number[];
+  agent?: AgentKind;
+  condition?: 'success' | 'failure' | 'any';
+}
+export interface Playbook {
+  id: string;
+  name: string;
+  description?: string;
+  workspaceId: string | null;
+  nodes: PlaybookNode[];
+  createdAt: number;
+  builtin?: boolean;
+}
+
 /** LLM プランナーが出力するグラフノード */
 export interface PlannedNode {
   ref: number;
