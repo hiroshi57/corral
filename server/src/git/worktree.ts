@@ -119,7 +119,14 @@ export async function getDiff(worktreePath: string): Promise<string> {
     return parts.join('\n\n');
   }
   try {
-    return await git(['diff', 'HEAD'], worktreePath);
+    const pending = await git(['diff', 'HEAD'], worktreePath);
+    if (pending.trim()) return pending;
+    // 承認(commit)済みで未コミット差分が無い場合は、このブランチのコミット内容を表示する
+    const committed = await git(
+      ['diff', '--stat', '-p', 'HEAD~1..HEAD'],
+      worktreePath
+    ).catch(() => git(['show', '--format=%s%n', 'HEAD'], worktreePath));
+    return committed.trim() ? `# 承認済み（コミット内容）\n${committed}` : '変更はありません';
   } catch {
     return '';
   }
