@@ -659,7 +659,10 @@ function toSummary(s: DemoSession): SessionSummary {
 
 export const demoBackend = new DemoBackend();
 
-/** デモモード判定：ビルドフラグ or URL ?demo=1 */
-export const IS_DEMO =
-  import.meta.env.VITE_CORRAL_DEMO === '1' ||
-  (typeof location !== 'undefined' && new URLSearchParams(location.search).has('demo'));
+/**
+ * デモモード判定：**ビルド時フラグのみ**で決まる。
+ * 本番ビルド（VITE_CORRAL_DEMO 未指定）では URL パラメータ等で
+ * デモに切り替えることはできない（誤ってデモを触る事故を防ぐ）。
+ * この定数はビルド時に確定するため、本番ビルドではデモ実装ごと除去される。
+ */
+export const IS_DEMO = import.meta.env.VITE_CORRAL_DEMO === '1';

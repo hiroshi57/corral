@@ -227,9 +227,19 @@ export default function App() {
       <header className="flex flex-wrap items-center gap-3 border-b border-edge bg-panel px-5 py-3">
         <span className="text-xl">🐎</span>
         <h1 className="text-lg font-bold">Corral</h1>
-        {demo && (
-          <span className="rounded border border-amber-500/30 bg-amber-500/20 px-2 py-0.5 text-[10px] text-amber-300">
-            DEMO
+        {demo ? (
+          <span
+            className="rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300"
+            title="疑似実行です。実エージェントは動きません"
+          >
+            DEMO（疑似実行）
+          </span>
+        ) : (
+          <span
+            className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300"
+            title="実エージェントが実際に動作します"
+          >
+            本番
           </span>
         )}
         <span
@@ -296,6 +306,24 @@ export default function App() {
           />
         </div>
       </header>
+
+      {/* デモ時は誤解を防ぐため常時バナーを出す */}
+      {demo && (
+        <div className="flex flex-wrap items-center gap-2 bg-amber-500/15 px-5 py-2 text-xs text-amber-200">
+          <span className="font-bold">これは UI 確認用のデモです（エージェントは実際には動きません）</span>
+          <span className="text-amber-200/80">
+            実際に動かすには、ローカルで <code className="rounded bg-black/30 px-1">start-corral.cmd</code> を実行してください（本番モード）。
+          </span>
+          <a
+            href="https://github.com/hiroshi57/corral#-本番実エージェントが実際に動く--これが本体です"
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto underline hover:text-amber-100"
+          >
+            本番の起動手順 →
+          </a>
+        </div>
+      )}
 
       {budget && (
         <div className={`flex items-center gap-2 px-5 py-2 text-sm ${budget.level === 'exceeded' ? 'bg-rose-500/15 text-rose-200' : 'bg-amber-500/15 text-amber-200'}`}>

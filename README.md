@@ -23,7 +23,25 @@
 
 ---
 
-## クイックスタート
+## ⚡ 本番（実エージェントが実際に動く）— これが本体です
+
+**`start-corral.cmd` をダブルクリック**するだけで起動し、ブラウザが開きます（http://127.0.0.1:4319）。
+
+```bash
+# コマンドから起動する場合
+cd /c/Users/hiroshi_takizawa/corral && ./start-corral.cmd
+```
+
+- 設定は **`corral.env`** を編集（対象リポジトリ・同時実行数・通知・予算など）
+- **`install-autostart.cmd`** を実行すると、Windows ログイン時に自動起動します（解除は `install-autostart.cmd uninstall`）
+- 依存の追加やコード更新後は `start-corral.cmd rebuild`
+- ヘッダに緑の **「本番」** バッジが出ていれば実エージェントが動く状態です
+
+> **注意**: [corral-tau.vercel.app](https://corral-tau.vercel.app) は **UI 確認用のデモ（疑似実行）** です。
+> 実際にエージェントを動かすには上記のローカル起動が必要です（CLI 起動・git worktree・常駐 WebSocket が必要なため、
+> サーバーレスでは動作しません）。本番ビルドにはデモ実装自体が含まれません。
+
+## クイックスタート（開発用）
 
 ```bash
 npm install
