@@ -9,12 +9,8 @@ echo   Corral 起動中（本番モード）
 echo ============================================
 echo.
 
-rem --- 設定を読み込む（corral.env を編集すれば変更できます） ---
-if exist "corral.env" (
-  for /f "usebackq delims=" %%L in ("corral.env") do (
-    echo %%L | findstr /b /i "set " >nul && call %%L
-  )
-)
+rem --- 設定を読み込む（corral.config.cmd を編集すれば変更できます） ---
+if exist "%~dp0corral.config.cmd" call "%~dp0corral.config.cmd"
 if "%CORRAL_DEMO%"=="" set CORRAL_DEMO=0
 if "%CORRAL_REPO%"=="" set CORRAL_REPO=%~dp0
 if "%CORRAL_MAX_CONCURRENT%"=="" set CORRAL_MAX_CONCURRENT=3
@@ -44,13 +40,26 @@ if /i "%1"=="rebuild" (
   echo [2/3] ビルド: OK
 )
 
+rem --- 設定内容の確認だけしたい場合: start-corral.cmd dryrun ---
+if /i "%1"=="dryrun" (
+  echo [確認] 読み込まれた設定:
+  echo   CORRAL_DEMO            = %CORRAL_DEMO%
+  echo   CORRAL_REPO            = %CORRAL_REPO%
+  echo   CORRAL_MAX_CONCURRENT  = %CORRAL_MAX_CONCURRENT%
+  echo   CORRAL_GUARDRAILS      = %CORRAL_GUARDRAILS%
+  echo   CORRAL_BUDGET_USD      = %CORRAL_BUDGET_USD%
+  echo   CORRAL_EXEC_MODE       = %CORRAL_EXEC_MODE%
+  if "%CORRAL_DEMO%"=="0" (echo   -^> 本番モード（実エージェントが動きます）) else (echo   -^> DEMO モード)
+  exit /b 0
+)
+
 rem --- 既に起動していないか確認 ---
 netstat -ano | findstr ":%CORRAL_PORT%" | findstr "LISTENING" >nul
 if not errorlevel 1 (
   echo.
   echo すでに起動しています。ブラウザを開きます。
   start "" "http://127.0.0.1:%CORRAL_PORT%"
-  timeout /t 3 >nul
+  ping -n 3 127.0.0.1 >nul
   exit /b 0
 )
 
@@ -70,7 +79,7 @@ echo ============================================
 echo.
 
 rem 3秒後にブラウザを開く
-start "" /min cmd /c "timeout /t 3 >nul & start "" http://127.0.0.1:%CORRAL_PORT%"
+start "" /min cmd /c "ping -n 4 127.0.0.1 >nul & start "" http://127.0.0.1:%CORRAL_PORT%"
 
 node server\dist\index.js
 goto :eof

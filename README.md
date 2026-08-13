@@ -32,7 +32,8 @@
 cd /c/Users/hiroshi_takizawa/corral && ./start-corral.cmd
 ```
 
-- 設定は **`corral.env`** を編集（対象リポジトリ・同時実行数・通知・予算など）
+- 設定は **`corral.config.cmd`** を編集（対象リポジトリ・同時実行数・通知・予算など）
+- 設定内容だけ確認したいときは `start-corral.cmd dryrun`
 - **`install-autostart.cmd`** を実行すると、Windows ログイン時に自動起動します（解除は `install-autostart.cmd uninstall`）
 - 依存の追加やコード更新後は `start-corral.cmd rebuild`
 - ヘッダに緑の **「本番」** バッジが出ていれば実エージェントが動く状態です

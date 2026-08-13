@@ -1,0 +1,4 @@
+
+# Windows バッチは CRLF 必須
+*.cmd text eol=crlf
+*.bat text eol=crlf
