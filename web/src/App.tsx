@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CommandDeck } from './components/CommandDeck';
 import { DocumentIntake } from './components/DocumentIntake';
 import { Playbooks } from './components/Playbooks';
+import { GettingStarted } from './components/GettingStarted';
 import { WorkerCard } from './components/WorkerCard';
 import { DetailPanel } from './components/DetailPanel';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -38,6 +39,8 @@ export default function App() {
   const [execMode, setExecMode] = useState('local');
   const [guardrailsOn, setGuardrailsOn] = useState(false);
   const [maxConcurrent, setMaxConcurrent] = useState(0);
+  // 手引き（初回は表示。閉じたら記憶し、ヘッダの「？使い方」で再表示）
+  const [showGuide, setShowGuide] = useState(localStorage.getItem('corral_guide_closed') !== '1');
 
   // ⑤/④ 認証・案件
   const [authReady, setAuthReady] = useState(false);
@@ -298,6 +301,16 @@ export default function App() {
               ) : null
             )}
           </div>
+          <button
+            onClick={() => {
+              setShowGuide(true);
+              setView('command');
+            }}
+            className="rounded-lg border border-edge bg-panel px-2 py-1.5 text-xs hover:border-accent"
+            title="使い方を表示"
+          >
+            ？使い方
+          </button>
           <NotificationCenter
             notifications={notifications}
             channels={channels}
@@ -361,6 +374,18 @@ export default function App() {
       ) : (
         <div className="flex min-h-0 flex-1">
           <div className="flex w-[420px] shrink-0 flex-col gap-3 overflow-auto border-r border-edge p-4">
+            {showGuide && (
+              <GettingStarted
+                repos={repos}
+                onChanged={refresh}
+                canCreate={canCreate}
+                isDemo={demo}
+                onClose={() => {
+                  setShowGuide(false);
+                  localStorage.setItem('corral_guide_closed', '1');
+                }}
+              />
+            )}
             <CommandDeck onChanged={refresh} repos={repos} canCreate={canCreate} canInstruct={canInstruct} />
             <DocumentIntake onChanged={refresh} repos={repos} canCreate={canCreate} />
             <Playbooks
