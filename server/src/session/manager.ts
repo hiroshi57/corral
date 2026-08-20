@@ -129,10 +129,17 @@ export class SessionManager extends EventEmitter {
     const repo = input.repoId ? repoStore.get(input.repoId) : undefined;
     const repoRoot = repo?.path ?? config.repoRoot;
     try {
-      const { worktreePath, branch } = await createWorktree(id, repoRoot);
+      const { worktreePath, branch, initializedRepo } = await createWorktree(id, repoRoot);
       session.worktreePath = worktreePath;
       session.branch = branch;
-      this.appendLog(session, 'system', `worktree を作成: ${branch}（repo: ${repo?.name ?? 'default'}）`);
+      if (initializedRepo) {
+        this.appendLog(
+          session,
+          'system',
+          `対象フォルダを変更履歴つき（git）で管理できるよう初期化しました: ${repoRoot}`
+        );
+      }
+      this.appendLog(session, 'system', `作業コピーを作成: ${branch}（対象: ${repo?.name ?? 'default'}）`);
       // #1 依存待ち / ③ 実行スロット待ち は queued のまま（promoteReady が後で起動）
       if (!this.depsSatisfied(session)) {
         this.appendLog(session, 'system', `依存タスクの完了待ち: ${session.dependsOn.join(', ')}`);

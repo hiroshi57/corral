@@ -8,7 +8,13 @@ import { config } from '../config.js';
 const execFileAsync = promisify(execFile);
 
 async function git(args: string[], cwd = config.repoRoot): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+  // core.quotepath=false: 日本語ファイル名を \346... とエスケープせずそのまま表示する
+  // （資料フォルダの案件では日本語ファイル名が主になるため必須）
+  const { stdout } = await execFileAsync('git', ['-c', 'core.quotepath=false', ...args], {
+    cwd,
+    maxBuffer: 10 * 1024 * 1024,
+    encoding: 'utf8',
+  });
   return stdout;
 }
 
@@ -26,22 +32,61 @@ async function useGit(repoRoot = config.repoRoot): Promise<boolean> {
   return !config.demo && (await isGitRepo(repoRoot));
 }
 
+/**
+ * 対象フォルダを「案件」として使えるようにする。
+ * git 管理でない場合（提案書・議事録などの資料フォルダ）は自動で git init して
+ * 初回コミットを作る。これにより、コードでない案件でも
+ * 作業コピーの隔離・差分レビュー・承認（履歴）が同じ仕組みで使える。
+ */
+export async function ensureRepo(
+  repoRoot: string = config.repoRoot
+): Promise<{ ok: boolean; initialized: boolean }> {
+  if (config.demo) return { ok: false, initialized: false };
+  if (await isGitRepo(repoRoot)) return { ok: true, initialized: false };
+  if (!config.autoGitInit) return { ok: false, initialized: false };
+  try {
+    await fs.mkdir(repoRoot, { recursive: true });
+    await git(['init'], repoRoot);
+    await git(['add', '-A'], repoRoot).catch(() => {});
+    await git(
+      [
+        '-c',
+        'user.name=Corral',
+        '-c',
+        'user.email=corral@local',
+        'commit',
+        '-m',
+        'corral: 案件フォルダを初期化',
+        '--allow-empty',
+      ],
+      repoRoot
+    );
+    return { ok: true, initialized: true };
+  } catch {
+    return { ok: false, initialized: false };
+  }
+}
+
 /** #4 マルチリポ: 対象リポジトリ(repoRoot)から worktree を作る */
 export async function createWorktree(
   sessionId: string,
   repoRoot: string = config.repoRoot
-): Promise<{ worktreePath: string; branch: string }> {
+): Promise<{ worktreePath: string; branch: string; initializedRepo: boolean }> {
   const branch = `corral/${sessionId}`;
   const worktreePath = path.join(config.worktreeBase, sessionId);
   await fs.mkdir(config.worktreeBase, { recursive: true });
 
-  if (!(await useGit(repoRoot))) {
+  // 資料フォルダ等（非git）は必要なら初期化してから隔離する
+  const { ok, initialized } = await ensureRepo(repoRoot);
+
+  if (!ok || !(await useGit(repoRoot))) {
+    // どうしても git を使えない場合のみ、素のフォルダで作業する
     await fs.mkdir(worktreePath, { recursive: true });
-    return { worktreePath, branch };
+    return { worktreePath, branch, initializedRepo: false };
   }
 
   await git(['worktree', 'add', '-b', branch, worktreePath, 'HEAD'], repoRoot);
-  return { worktreePath, branch };
+  return { worktreePath, branch, initializedRepo: initialized };
 }
 
 export async function removeWorktree(

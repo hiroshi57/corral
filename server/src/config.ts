@@ -17,6 +17,12 @@ export const config = {
   demo: process.env.CORRAL_DEMO !== '0',
   /** 対象リポジトリのルート（worktree の親） */
   repoRoot: path.resolve(process.env.CORRAL_REPO ?? process.cwd()),
+  /**
+   * 対象フォルダが git 管理でない場合に自動で git init するか（既定 ON）。
+   * 提案書・議事録などの「コードでない案件」でも、変更履歴・差分レビュー・承認を
+   * 同じ仕組みで扱えるようにするため。0 で無効化。
+   */
+  autoGitInit: process.env.CORRAL_AUTO_GIT_INIT !== '0',
   /** worktree を作るベースディレクトリ */
   worktreeBase: path.resolve(
     process.env.CORRAL_WORKTREE_BASE ?? path.join(process.cwd(), '.corral', 'worktrees')

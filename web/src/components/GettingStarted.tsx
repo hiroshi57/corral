@@ -4,27 +4,53 @@ import { useState } from 'react';
 import type { AgentKind, Repo } from '../lib/types';
 import { api } from '../lib/api';
 
-/** そのまま使える指示の例（クリックでサンプル実行） */
-const EXAMPLES: Array<{ label: string; prompt: string; note: string }> = [
-  {
-    label: 'コードを調べてもらう',
-    prompt:
-      'このリポジトリの構成を調べ、主要なディレクトリとその役割を docs/repo-overview.md にまとめてください。',
-    note: '安全（新規ファイルを1つ作るだけ）',
-  },
-  {
-    label: '改善点を出してもらう',
-    prompt:
-      'README.md を読み、改善したほうがよい点を3つ挙げて docs/review-notes.md に書き出してください。既存ファイルは変更しないでください。',
-    note: '安全（新規ファイルを1つ作るだけ）',
-  },
-  {
-    label: 'テストを追加してもらう',
-    prompt:
-      'テストが不足している箇所を1つ選び、テストを追加してください。既存の挙動は変えないでください。',
-    note: '実コードに変更が入ります（承認前に差分を確認できます）',
-  },
-];
+type Example = { label: string; prompt: string; note: string };
+
+/** 案件の種類ごとの「そのまま使える指示」例（クリックで実行） */
+const EXAMPLES: Record<'code' | 'docs', Example[]> = {
+  // プログラムのリポジトリを対象にした案件
+  code: [
+    {
+      label: 'コードを調べてもらう',
+      prompt:
+        'このリポジトリの構成を調べ、主要なディレクトリとその役割を docs/repo-overview.md にまとめてください。',
+      note: '安全（新規ファイルを1つ作るだけ）',
+    },
+    {
+      label: '改善点を出してもらう',
+      prompt:
+        'README.md を読み、改善したほうがよい点を3つ挙げて docs/review-notes.md に書き出してください。既存ファイルは変更しないでください。',
+      note: '安全（新規ファイルを1つ作るだけ）',
+    },
+    {
+      label: 'テストを追加してもらう',
+      prompt:
+        'テストが不足している箇所を1つ選び、テストを追加してください。既存の挙動は変えないでください。',
+      note: '実コードに変更が入ります（承認前に差分を確認できます）',
+    },
+  ],
+  // 提案書・議事録・レポートなど「コードでない案件」
+  docs: [
+    {
+      label: '資料を棚卸ししてもらう',
+      prompt:
+        'このフォルダにある資料をすべて読み、どんな資料が何のためにあるのかを一覧にして 資料一覧.md にまとめてください。',
+      note: '安全（新規ファイルを1つ作るだけ）',
+    },
+    {
+      label: '議事録から次アクションを出してもらう',
+      prompt:
+        '議事録（または打合せメモ）を読み、決定事項と課題を踏まえた「次アクション一覧」を 次アクション.md として作成してください。担当と期限の欄も用意してください。',
+      note: '安全（新規ファイルを1つ作るだけ）',
+    },
+    {
+      label: '提案書のたたき台を作ってもらう',
+      prompt:
+        'このフォルダの資料をもとに、顧客提案の骨子（課題・打ち手・期待効果・進め方・概算費用）を 提案骨子.md として作成してください。',
+      note: '安全（新規ファイルを1つ作るだけ）',
+    },
+  ],
+};
 
 export function GettingStarted({
   repos = [],
@@ -41,6 +67,8 @@ export function GettingStarted({
 }) {
   const [busy, setBusy] = useState<number | null>(null);
   const [msg, setMsg] = useState('');
+  const [kind, setKind] = useState<'code' | 'docs'>('code');
+  const list = EXAMPLES[kind];
 
   const runExample = async (i: number) => {
     setBusy(i);
@@ -48,10 +76,10 @@ export function GettingStarted({
     try {
       await api.createSessions({
         agent: 'claude' as AgentKind,
-        prompt: EXAMPLES[i].prompt,
+        prompt: list[i].prompt,
         count: 1,
         repoId: repos[0]?.id,
-        title: EXAMPLES[i].label,
+        title: list[i].label,
       });
       setMsg('起動しました。下の「ワーカー」に現れます。完了したら差分を確認して承認してください。');
       onChanged();
@@ -90,11 +118,34 @@ export function GettingStarted({
 
       {/* まず1つ試す */}
       <div className="rounded-lg border border-edge bg-panel p-2.5">
-        <div className="mb-1.5 text-[11px] font-bold text-slate-300">
-          まずは1つ試してみる（クリックで実行）
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="text-[11px] font-bold text-slate-300">まずは1つ試してみる</span>
+          {/* 案件の種類でサンプルを切り替え（コードでない案件にも対応） */}
+          <div className="ml-auto flex gap-0.5 rounded-lg border border-edge bg-panel2 p-0.5">
+            <button
+              onClick={() => setKind('code')}
+              className={`rounded px-2 py-0.5 text-[10px] ${kind === 'code' ? 'bg-accent font-bold text-black' : 'text-slate-400'}`}
+            >
+              プログラム
+            </button>
+            <button
+              onClick={() => setKind('docs')}
+              className={`rounded px-2 py-0.5 text-[10px] ${kind === 'docs' ? 'bg-accent font-bold text-black' : 'text-slate-400'}`}
+            >
+              資料・ドキュメント
+            </button>
+          </div>
         </div>
+        {kind === 'docs' && (
+          <div className="mb-1.5 rounded bg-panel2 px-2 py-1 text-[10px] leading-relaxed text-slate-400">
+            提案書・議事録・レポートなどの<b>資料フォルダも案件にできます</b>。
+            <code className="mx-1 rounded bg-black/30 px-1">corral.config.cmd</code> の
+            <code className="mx-1 rounded bg-black/30 px-1">CORRAL_REPO</code>
+            に資料フォルダを指定してください（初回に変更履歴の管理を自動で用意します）。
+          </div>
+        )}
         <div className="flex flex-col gap-1.5">
-          {EXAMPLES.map((ex, i) => (
+          {list.map((ex, i) => (
             <button
               key={i}
               onClick={() => runExample(i)}
