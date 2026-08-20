@@ -109,6 +109,38 @@ export const AGENT_PROFILES: Record<AgentKind, AgentProfile> = {
   },
 };
 
+/**
+ * エージェントごとのモデル指定（任意）。
+ * 例: CORRAL_CODEX_MODEL=gpt-5.1  CORRAL_CLAUDE_MODEL=sonnet
+ * 既定モデルがアカウント種別で使えない場合に、設定だけで切り替えられるようにする。
+ */
+const MODEL_ENV: Partial<Record<AgentKind, { env: string; flag: string }>> = {
+  claude: { env: 'CORRAL_CLAUDE_MODEL', flag: '--model' },
+  codex: { env: 'CORRAL_CODEX_MODEL', flag: '-m' },
+  gemini: { env: 'CORRAL_GEMINI_MODEL', flag: '-m' },
+};
+
+/** モデル指定があれば引数に足す（コマンド直後に置く） */
+function withModel(kind: AgentKind, args: string[]): string[] {
+  const m = MODEL_ENV[kind];
+  const value = m ? process.env[m.env] : undefined;
+  if (!m || !value) return args;
+  // codex は `exec` などのサブコマンドの後にフラグを置く必要があるため末尾寄りに挿入
+  return [...args, m.flag, value];
+}
+
 export function getProfile(kind: AgentKind): AgentProfile {
-  return AGENT_PROFILES[kind] ?? AGENT_PROFILES.custom;
+  const base = AGENT_PROFILES[kind] ?? AGENT_PROFILES.custom;
+  // モデル指定を反映したプロファイルを返す
+  return {
+    ...base,
+    buildInitial: (autoAccept) => {
+      const spec = base.buildInitial(autoAccept);
+      return { ...spec, args: withModel(base.kind, spec.args) };
+    },
+    buildFollowup: (autoAccept) => {
+      const spec = base.buildFollowup(autoAccept);
+      return { ...spec, args: withModel(base.kind, spec.args) };
+    },
+  };
 }

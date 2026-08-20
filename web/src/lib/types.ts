@@ -108,6 +108,8 @@ export interface SessionSummary {
   dependsCondition?: 'success' | 'failure' | 'any';
   graphPos?: { x: number; y: number };
   violations: GuardrailViolation[];
+  failureReason?: 'usage-limit' | 'auth' | 'not-found' | 'unknown';
+  triedAgents?: AgentKind[];
   worktreePath: string | null;
   branch: string | null;
   autoAccept: boolean;

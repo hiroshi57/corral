@@ -165,9 +165,14 @@ export const api = {
       ? Promise.resolve(demoBackend.createWorkspace(name))
       : req<WorkspaceInfo>('/workspaces', { method: 'POST', body: JSON.stringify({ name }) }),
 
-  // #4 マルチリポ
+  // #4 マルチリポ（対象フォルダ／リポジトリ）
   listRepos: () =>
     IS_DEMO ? Promise.resolve(demoBackend.listRepos(store.getWorkspace())) : req<Repo[]>('/repos'),
+
+  createRepo: (name: string, path: string) =>
+    IS_DEMO
+      ? Promise.resolve(demoBackend.createRepo(name, path, store.getWorkspace()))
+      : req<Repo>('/repos', { method: 'POST', body: JSON.stringify({ name, path }) }),
 
   // ドキュメント → LLM プランナー（実エージェント）。demo/失敗時は空→client がフォールバック
   planTasks: (text: string, agent?: AgentKind) =>

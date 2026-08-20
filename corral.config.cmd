@@ -32,3 +32,13 @@ rem set CORRAL_EXEC_MODE=local
 
 rem ---- Extra repositories for multi-repo (optional, JSON) ----
 rem set CORRAL_REPOS=[{"name":"web","path":"C:\\path\\to\\web","workspaceId":"default"}]
+
+rem ---- Model override (optional) ----
+rem Use when the default model is not available for your account/plan.
+rem Example: the codex default 'gpt-5-codex' may be rejected on some ChatGPT accounts.
+rem set CORRAL_CODEX_MODEL=gpt-5.1
+rem set CORRAL_CLAUDE_MODEL=sonnet
+rem set CORRAL_GEMINI_MODEL=gemini-2.5-pro
+
+rem ---- Auto fallback to another agent on usage limit / auth error (1 = on) ----
+set CORRAL_AGENT_FALLBACK=1

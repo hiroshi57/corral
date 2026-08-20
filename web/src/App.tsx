@@ -4,6 +4,7 @@ import { CommandDeck } from './components/CommandDeck';
 import { DocumentIntake } from './components/DocumentIntake';
 import { Playbooks } from './components/Playbooks';
 import { GettingStarted } from './components/GettingStarted';
+import { RepoManager } from './components/RepoManager';
 import { WorkerCard } from './components/WorkerCard';
 import { DetailPanel } from './components/DetailPanel';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -386,6 +387,11 @@ export default function App() {
                 }}
               />
             )}
+            <RepoManager
+              repos={repos}
+              onChanged={loadRepos}
+              canManage={can(role, 'workspace:manage')}
+            />
             <CommandDeck onChanged={refresh} repos={repos} canCreate={canCreate} canInstruct={canInstruct} />
             <DocumentIntake onChanged={refresh} repos={repos} canCreate={canCreate} />
             <Playbooks

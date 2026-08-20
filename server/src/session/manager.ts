@@ -18,6 +18,7 @@ import { repoStore } from '../tenancy/repos.js';
 import { checkPrompt, scanSecrets, checkChanges } from '../guardrails/policy.js';
 import { audit } from '../audit/log.js';
 import { assignAgent } from '../agents/assign.js';
+import { detectAgents } from '../agents/detect.js';
 import type { Playbook } from '../types.js';
 import type {
   AgentKind,
@@ -28,6 +29,62 @@ import type {
   SessionStatus,
   SessionSummary,
 } from '../types.js';
+
+/** 失敗理由ごとの、人が読んで分かるメッセージ */
+const FAILURE_MESSAGE: Record<NonNullable<Session['failureReason']>, string> = {
+  'usage-limit':
+    'エージェントの利用上限に達したため実行できませんでした（プラン上限・レート制限）。上限の回復後に再実行するか、別のエージェントをお試しください。',
+  auth: 'エージェントにログインしていないため実行できませんでした。該当CLIで認証してから再実行してください。',
+  'not-found': 'エージェントのコマンドが見つかりませんでした。CLIのインストール状況をご確認ください。',
+  unknown: '実行に失敗しました（詳細は端末の出力をご確認ください）。',
+};
+
+/** 直近の出力（エージェントの標準出力/エラー）をまとめて取り出す */
+function recentOutput(session: Session, n = 40): string {
+  return session.logs
+    .slice(-n)
+    .filter((l) => l.stream !== 'system')
+    .map((l) => l.text)
+    .join('\n');
+}
+
+/**
+ * 終了コードが 0 でも、出力を見ると失敗している場合を検出する。
+ * （codex は API エラーでも exit 0 で終わることがあるため、
+ *   「実際には何もしていないのに完了」と誤表示するのを防ぐ）
+ */
+function outputLooksFailed(session: Session): boolean {
+  const t = recentOutput(session);
+  return /(^|\n)\s*(\[[^\]]*\]\s*)?ERROR[: ]|bad request|not supported|hit your (weekly|daily) limit|unauthorized|invalid api key|rate limit/i.test(
+    t
+  );
+}
+
+/** 出力から代表的なエラー行を1行取り出す（UI/ログでの原因提示用） */
+function extractErrorLine(session: Session): string | null {
+  const lines = recentOutput(session).split('\n');
+  const hit = [...lines]
+    .reverse()
+    .find((l) => /ERROR|error:|bad request|not supported|limit|unauthorized/i.test(l));
+  return hit ? hit.trim().slice(0, 300) : null;
+}
+
+/** 直近の出力から失敗理由を推定する */
+function classifyFailure(session: Session): NonNullable<Session['failureReason']> {
+  const text = recentOutput(session).toLowerCase();
+  if (
+    /weekly limit|usage limit|rate limit|quota|too many requests|上限に達し|利用制限/.test(text)
+  ) {
+    return 'usage-limit';
+  }
+  if (/not logged in|unauthorized|authentication|please run .*login|api key|認証/.test(text)) {
+    return 'auth';
+  }
+  if (/起動エラー|enoent|not recognized|command not found|見つかりません/.test(text)) {
+    return 'not-found';
+  }
+  return 'unknown';
+}
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   claude: 'Claude',
@@ -179,6 +236,20 @@ export class SessionManager extends EventEmitter {
   private repoRootOf(session: Session): string {
     const repo = session.repoId ? repoStore.get(session.repoId) : undefined;
     return repo?.path ?? config.repoRoot;
+  }
+
+  /**
+   * 利用上限・未認証で失敗した場合に、代わりに使える別エージェントを選ぶ。
+   * 一度試したエージェントは除外し、検出済み（インストール済み）のものだけを候補にする。
+   */
+  private async pickFallbackAgent(session: Session): Promise<AgentKind | null> {
+    if (!config.agentFallback) return null;
+    if (session.failureReason !== 'usage-limit' && session.failureReason !== 'auth') return null;
+    const tried = new Set(session.triedAgents ?? [session.agent]);
+    tried.add(session.agent);
+    const detected = await detectAgents();
+    const candidate = detected.find((d) => d.available && d.kind !== 'custom' && !tried.has(d.kind));
+    return candidate?.kind ?? null;
   }
 
   /**
@@ -393,8 +464,35 @@ export class SessionManager extends EventEmitter {
 
       if (code === null) {
         this.setStatus(session, 'stopped');
-      } else if (code !== 0) {
-        this.appendLog(session, 'system', `異常終了（code=${code}）`);
+        // 終了コード 0 でも、出力にエラーが出ていて成果が無い場合は失敗として扱う
+        // （例: codex が 400 を返しても exit 0 で終わる。「やっていないのに完了」を防ぐ）
+      } else if (code !== 0 || (session.changedFiles === 0 && outputLooksFailed(session))) {
+        // 失敗理由を分類し、利用上限・未認証なら別エージェントで1回だけ自動再試行する
+        const reason = classifyFailure(session);
+        session.failureReason = reason;
+        if (code === 0) {
+          this.appendLog(
+            session,
+            'system',
+            '終了コードは正常でしたが、出力にエラーがあり成果物が無いため失敗として扱います。'
+          );
+        }
+        this.appendLog(session, 'system', FAILURE_MESSAGE[reason]);
+        const detail = extractErrorLine(session);
+        if (detail) this.appendLog(session, 'system', `エラー内容: ${detail}`);
+        const alt = await this.pickFallbackAgent(session);
+        if (alt) {
+          session.triedAgents = [...(session.triedAgents ?? [session.agent]), alt];
+          this.appendLog(
+            session,
+            'system',
+            `${session.agent} が使えないため ${alt} に切り替えて再試行します。`
+          );
+          session.agent = alt;
+          session.failureReason = undefined;
+          this.startRun(session, session.turns[session.turns.length - 1] ?? session.prompt, false);
+          return;
+        }
         this.setStatus(session, 'error');
       } else if (session.autoAccept) {
         await this.approve(session.id, `corral: ${session.title}`);

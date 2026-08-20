@@ -163,6 +163,10 @@ export interface Session {
   graphPos?: { x: number; y: number };
   /** #20 ガードレール違反の履歴 */
   violations: GuardrailViolation[];
+  /** 失敗理由の分類（利用上限・認証切れ等をUIで分かるようにする） */
+  failureReason?: 'usage-limit' | 'auth' | 'not-found' | 'unknown';
+  /** 試行済みエージェント（自動フォールバックの重複回避） */
+  triedAgents?: AgentKind[];
   /** 作業ブランチ名 */
   branch: string | null;
   /** auto-accept（確認を自動承認） */

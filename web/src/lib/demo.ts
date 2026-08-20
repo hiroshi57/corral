@@ -88,6 +88,13 @@ class DemoBackend {
     return this.repos.filter((r) => r.workspaceId === workspaceId);
   }
 
+  createRepo(name: string, path: string, workspaceId: string): Repo {
+    const r: Repo = { id: id8(), name, path, workspaceId };
+    this.repos.push(r);
+    this.recordAudit('repo.create', 'success', r.id, `${name} (${path})`);
+    return r;
+  }
+
   // 監査ログ（デモはクライアント内で記録）
   private auditLog: AuditEvent[] = [];
   private auditPrev = 'genesis';

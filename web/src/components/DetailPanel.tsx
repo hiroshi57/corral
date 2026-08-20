@@ -227,6 +227,28 @@ export function DetailPanel({
         </div>
       )}
 
+      {/* 失敗理由（利用上限・未認証などを分かるように） */}
+      {session.status === 'error' && session.failureReason && (
+        <div className="border-t border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+          <b>
+            {session.failureReason === 'usage-limit'
+              ? '⏳ エージェントの利用上限に達しました'
+              : session.failureReason === 'auth'
+                ? '🔑 エージェントにログインが必要です'
+                : session.failureReason === 'not-found'
+                  ? '❓ エージェントのコマンドが見つかりません'
+                  : '⚠️ 実行に失敗しました'}
+          </b>
+          <span className="ml-1 text-amber-200/80">
+            {session.failureReason === 'usage-limit'
+              ? '上限の回復後に再実行するか、別のエージェント（司令塔で選択）でお試しください。'
+              : session.failureReason === 'auth'
+                ? '該当のCLIで認証してから、追加指示で再実行してください。'
+                : '端末の出力に詳細が出ています。'}
+          </span>
+        </div>
+      )}
+
       {/* #20 ガードレール違反 */}
       {session.violations?.length > 0 && (
         <div className="border-t border-rose-500/30 bg-rose-500/10 px-3 py-2">

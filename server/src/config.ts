@@ -93,6 +93,12 @@ export const config = {
     maxInMemory: Number(process.env.CORRAL_AUDIT_MEM ?? 5000),
   },
 
+  /**
+   * エージェントが利用上限・未認証で失敗した時に、別の利用可能なエージェントで
+   * 自動的に1回だけ再試行するか（既定 ON）。0 で無効化。
+   */
+  agentFallback: process.env.CORRAL_AGENT_FALLBACK !== '0',
+
   // --- ③ 実行キュー上限（同時実行数の制御） ---
   queue: {
     /** 同時に running にできる最大数（0=無制限） */
