@@ -9,12 +9,13 @@ const corralRoot = path.resolve(here, '..', '..');
 
 const port = Number(process.env.CORRAL_PORT ?? 4319);
 const host = process.env.CORRAL_HOST ?? '127.0.0.1';
+/** デモモード（既定 ON）。実運用は CORRAL_DEMO=0 */
+const demo = process.env.CORRAL_DEMO !== '0';
 
 export const config = {
   port,
   host,
-  /** デモモード（既定 ON）。実運用は CORRAL_DEMO=0 */
-  demo: process.env.CORRAL_DEMO !== '0',
+  demo,
   /** 対象リポジトリのルート（worktree の親） */
   repoRoot: path.resolve(process.env.CORRAL_REPO ?? process.cwd()),
   /**
@@ -33,6 +34,12 @@ export const config = {
   corralRoot,
   /** APIアクセストークン（未指定ならランダム生成し token ファイルへ書き出す） */
   token: process.env.CORRAL_TOKEN ?? randomUUID(),
+  /**
+   * セッション署名用シークレット。API トークン（ブラウザへ配布される値）とは
+   * 必ず分離する。共用すると、トークンを知る者が任意ユーザーのセッションを
+   * 偽造でき RBAC が無効化される。
+   */
+  sessionSecret: process.env.CORRAL_SESSION_SECRET ?? randomUUID(),
   /** トークン共有ファイル（Vite プロキシが読んでヘッダに付与する） */
   tokenFile: path.join(corralRoot, '.corral', 'token'),
   /** CORS で許可するオリジン（ローカルのダッシュボードのみ） */
@@ -59,8 +66,12 @@ export const config = {
 
   // --- ⑤ 認証 / SSO ---
   auth: {
-    /** dev ログイン（メール入力でログイン）を許可するか。既定 ON（ローカル/デモ用） */
-    devLogin: process.env.CORRAL_DEV_LOGIN !== '0',
+    /**
+     * dev ログイン（メール入力だけでログイン）を許可するか。
+     * 既定はデモモードのみ ON。本番(CORRAL_DEMO=0)では明示的に
+     * CORRAL_DEV_LOGIN=1 を指定しない限り無効（安全側の既定値）。
+     */
+    devLogin: process.env.CORRAL_DEV_LOGIN ? process.env.CORRAL_DEV_LOGIN !== '0' : demo,
     /** セッション有効期間(ms) 既定12h */
     sessionTtlMs: Number(process.env.CORRAL_SESSION_TTL_MS ?? 12 * 3600 * 1000),
     /** Google OIDC（設定時のみ有効） */

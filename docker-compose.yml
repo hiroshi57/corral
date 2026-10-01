@@ -10,6 +10,10 @@ services:
       CORRAL_DEMO: '0'
       CORRAL_HOST: '0.0.0.0'
       CORRAL_TOKEN: '${CORRAL_TOKEN:?トークンを .env で設定してください}'
+      # セッション署名鍵は API トークンと分離する（共用すると偽造で RBAC を回避できる）
+      CORRAL_SESSION_SECRET: '${CORRAL_SESSION_SECRET:?セッション鍵を .env で設定してください}'
+      # dev ログイン（メール入力だけでログイン）は本番で無効。SSO/OIDC を使う
+      CORRAL_DEV_LOGIN: '0'
       # 対象リポジトリ（コンテナ内パス）。ボリュームでマウント
       CORRAL_REPO: '/repos/main'
       # 実行モード: local | docker(サンドボックス) | ssh(リモート)

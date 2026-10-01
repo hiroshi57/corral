@@ -1,5 +1,6 @@
 // ④ テナンシー: ユーザー / ワークスペース（案件） / メンバーシップ（インメモリ）
 import { nanoid } from 'nanoid';
+import { config } from '../config.js';
 import type { Membership, Role, User, Workspace } from '../types.js';
 
 /** マシントークン(x-corral-token)由来のオーナー擬似ユーザー */
@@ -34,8 +35,12 @@ class TenancyStore {
     if (existing) return existing;
     const user: User = { id: u.id ?? nanoid(8), email: u.email, name: u.name, provider: u.provider };
     this.users.set(user.id, user);
-    // 新規ユーザーは既定案件へ member として参加（体験用）。オーナーが後で昇格可能
-    this.memberships.push({ workspaceId: 'default', userId: user.id, role: 'member' });
+    // 既定案件への自動参加は体験用のためデモモードのみ。
+    // 本番では招待(member:manage)で明示的に付与する（誰でもログインすれば
+    // member になれる状態を避ける）。
+    if (config.demo) {
+      this.memberships.push({ workspaceId: 'default', userId: user.id, role: 'member' });
+    }
     return user;
   }
 

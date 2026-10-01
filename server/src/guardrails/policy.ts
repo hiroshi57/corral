@@ -4,9 +4,11 @@ import type { GuardrailViolation } from '../types.js';
 
 // 機密情報の典型パターン（APIキー/トークン/秘密鍵）
 const SECRET_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  { re: /sk-[A-Za-z0-9]{20,}/, label: 'OpenAI風APIキー' },
+  // sk-ant-api03-… / sk-proj-… のようにハイフンを含む形式も捕捉する
+  { re: /sk-[A-Za-z0-9_-]{20,}/, label: 'APIキー(sk-形式: OpenAI/Anthropic等)' },
   { re: /AKIA[0-9A-Z]{16}/, label: 'AWSアクセスキー' },
-  { re: /ghp_[A-Za-z0-9]{30,}/, label: 'GitHubトークン' },
+  { re: /gh[pousr]_[A-Za-z0-9]{20,}/, label: 'GitHubトークン' },
+  { re: /AIza[0-9A-Za-z_-]{35}/, label: 'Google APIキー' },
   { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, label: '秘密鍵' },
   { re: /xox[baprs]-[A-Za-z0-9-]{10,}/, label: 'Slackトークン' },
 ];

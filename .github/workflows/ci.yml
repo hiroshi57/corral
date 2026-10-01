@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: 依存をインストール（lock 固定）
+        run: npm ci
+      - name: サーバのテスト（RBAC / セッション鍵 / WS 分離 / env 遮断）
+        run: npm test -w server
+      - name: サーバをビルド
+        run: npm run build -w server
+      - name: Web をビルド（tsc --noEmit を含む）
+        run: npm run build -w web
+      - name: 依存の脆弱性チェック（high 以上で失敗）
+        run: npm audit --audit-level=high

@@ -7,11 +7,13 @@ export type Permission =
   | 'session:instruct'
   | 'session:approve'
   | 'session:view'
+  | 'session:delete'
+  | 'workspace:create'
   | 'audit:view';
 
 const MATRIX: Record<Role, Permission[]> = {
-  owner: ['workspace:manage', 'member:manage', 'session:create', 'session:instruct', 'session:approve', 'session:view', 'audit:view'],
-  admin: ['workspace:manage', 'member:manage', 'session:create', 'session:instruct', 'session:approve', 'session:view', 'audit:view'],
+  owner: ['workspace:manage', 'workspace:create', 'member:manage', 'session:create', 'session:instruct', 'session:approve', 'session:view', 'session:delete', 'audit:view'],
+  admin: ['workspace:manage', 'workspace:create', 'member:manage', 'session:create', 'session:instruct', 'session:approve', 'session:view', 'session:delete', 'audit:view'],
   member: ['session:create', 'session:instruct', 'session:approve', 'session:view'],
   viewer: ['session:view'],
 };

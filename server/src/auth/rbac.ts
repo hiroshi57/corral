@@ -4,7 +4,9 @@ import type { Permission, Role } from '../types.js';
 const MATRIX: Record<Role, Permission[]> = {
   owner: [
     'workspace:manage',
+    'workspace:create',
     'member:manage',
+    'session:delete',
     'session:create',
     'session:instruct',
     'session:approve',
@@ -13,7 +15,9 @@ const MATRIX: Record<Role, Permission[]> = {
   ],
   admin: [
     'workspace:manage',
+    'workspace:create',
     'member:manage',
+    'session:delete',
     'session:create',
     'session:instruct',
     'session:approve',
