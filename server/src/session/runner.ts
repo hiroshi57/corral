@@ -5,6 +5,9 @@
 //    stdin かファイル経由でのみ渡すため、コマンドインジェクションが構造的に起きない。
 //  - POSIX では shell:false（配列 argv でそのまま実行）。
 //    Windows は .cmd 実行のため shell を使うが、argv にユーザー文字列が無いので安全。
+//  - 子プロセスへ渡す環境変数は allowlist 方式。corral 自身の秘密を露出させない。
+//  - 注意: これはコマンドインジェクション対策であり、プロンプトインジェクション
+//    （LLM 入力そのものに起因する攻撃）は防げない。
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
@@ -20,6 +23,38 @@ export interface Runner {
 }
 
 const isWin = process.platform === 'win32';
+
+/** OS / ツール動作に必要な変数名（完全一致） */
+const ENV_KEEP = new Set([
+  'PATH', 'Path', 'PATHEXT', 'HOME', 'USERPROFILE', 'SystemRoot', 'windir', 'COMSPEC',
+  'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ', 'SHELL', 'TERM',
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMDATA',
+  'USERNAME', 'USER', 'LOGNAME', 'NUMBER_OF_PROCESSORS', 'NODE_EXTRA_CA_CERTS',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME',
+]);
+
+/** エージェント CLI が必要とする資格情報の接頭辞 */
+const ENV_KEEP_PREFIX = [
+  'ANTHROPIC_', 'CLAUDE_', 'OPENAI_', 'CODEX_', 'GEMINI_', 'GOOGLE_API', 'VERTEX_',
+  'AZURE_OPENAI', 'AWS_', 'AIDER_', 'OLLAMA_', 'GH_', 'GITHUB_TOKEN', 'GIT_',
+  'PROGRAMFILES(',
+];
+
+/**
+ * 子プロセスへ渡す環境変数を組み立てる（allowlist 方式）。
+ * CORRAL_* は corral 自身の秘密（API トークン / SAML 証明書 / Chatwork
+ * トークン / SIEM 認証ヘッダ）を含むため一律で除外する。
+ */
+export function childEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if (key.startsWith('CORRAL_')) continue;
+    if (ENV_KEEP.has(key) || ENV_KEEP_PREFIX.some((p) => key.startsWith(p))) out[key] = value;
+  }
+  return out;
+}
 
 /** 実エージェント CLI を子プロセスで1回起動 */
 export class ProcessRunner extends EventEmitter implements Runner {
@@ -42,7 +77,7 @@ export class ProcessRunner extends EventEmitter implements Runner {
       cwd,
       // Windows のみ shell（.cmd 解決）。argv にユーザー文字列が無いため注入は起きない
       shell: isWin,
-      env: process.env,
+      env: childEnv(),
     });
 
     this.child.stdout?.on('data', (b: Buffer) => this.emit('output', 'stdout', b.toString()));

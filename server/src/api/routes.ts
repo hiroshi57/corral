@@ -65,7 +65,9 @@ export function createRouter(sessions: SessionManager): Router {
     res.json(tenancy.listWorkspacesForUser(req.identity!.user.id));
   });
 
-  router.post('/workspaces', resolveWorkspace, (req, res) => {
+  // 案件の新規作成は owner/admin のみ。権限ゲートが無いと member が
+  // 自分を owner とする案件を作れてしまい RBAC を自己昇格で回避できる。
+  router.post('/workspaces', resolveWorkspace, requirePerm('workspace:create'), (req, res) => {
     const { name } = req.body as { name?: string };
     if (!name?.trim()) return res.status(400).json({ error: '案件名は必須です' });
     const ws = tenancy.createWorkspace(name.trim(), req.identity!.user.id);
@@ -155,7 +157,8 @@ export function createRouter(sessions: SessionManager): Router {
     res.json({ ok: sessions.stop(req.params.id) });
   });
 
-  router.delete('/sessions/:id', resolveWorkspace, requirePerm('session:create'), inWorkspace, async (req, res) => {
+  // 削除は作成権限ではなく専用権限で判定する（監査証跡の消失を防ぐ）
+  router.delete('/sessions/:id', resolveWorkspace, requirePerm('session:delete'), inWorkspace, async (req, res) => {
     rec(req, 'session.remove', 'success', req.params.id);
     res.json({ ok: await sessions.remove(req.params.id) });
   });
@@ -166,7 +169,8 @@ export function createRouter(sessions: SessionManager): Router {
   });
 
   // ① 通知テスト送信
-  router.post('/notify/test', resolveWorkspace, requirePerm('session:view'), async (_req, res) => {
+  // 外部(Chatwork/Slack)への送信を伴うため閲覧権限では許可しない
+  router.post('/notify/test', resolveWorkspace, requirePerm('workspace:manage'), async (_req, res) => {
     res.json(
       await notify({ sessionId: 'test', title: '通知テスト', status: 'done', branch: null, demo: config.demo })
     );

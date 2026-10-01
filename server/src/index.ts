@@ -57,13 +57,23 @@ app.use('/api', resolveIdentity, createRouter(sessions));
 
 // (4) 本番：ビルド済み Web を同一オリジンで配信し、token を HTML に注入
 const webDist = path.join(config.corralRoot, 'web', 'dist');
+/** 同一ホスト（ループバック）からの接続か */
+function isLoopback(req: Request): boolean {
+  const addr = (req.socket.remoteAddress ?? '').replace('::ffff:', '');
+  return addr === '127.0.0.1' || addr === '::1';
+}
+
 if (fs.existsSync(webDist)) {
-  app.get('/', (_req, res) => {
+  app.get('/', (req, res) => {
     let html = fs.readFileSync(path.join(webDist, 'index.html'), 'utf8');
-    html = html.replace(
-      '</head>',
-      `<script>window.__CORRAL_TOKEN__=${JSON.stringify(config.token)}</script></head>`
-    );
+    // オーナー相当のトークンはローカル利用者にのみ渡す。社内/リモート公開時に
+    // 注入すると、未認証の閲覧者が owner 権限を取得できてしまう。
+    if (isLoopback(req)) {
+      html = html.replace(
+        '</head>',
+        `<script>window.__CORRAL_TOKEN__=${JSON.stringify(config.token)}</script></head>`
+      );
+    }
     res.type('html').send(html);
   });
   app.use(express.static(webDist));
@@ -78,6 +88,8 @@ server.listen(config.port, config.host, () => {
   console.log(`   WS  : ws://${config.host}:${config.port}/ws`);
   console.log(`   モード: ${config.demo ? 'DEMO（疑似実行）' : '本番（実エージェント起動）'}`);
   console.log(`   対象リポ: ${config.repoRoot}`);
-  console.log(`   トークン: ${config.token}`);
+  // 全文は端末履歴や CI ログに残るため先頭のみ表示する（全文は tokenFile を参照）
+  console.log(`   トークン: ${config.token.slice(0, 8)}…（全文: ${config.tokenFile}）`);
+  console.log(`   dev ログイン: ${config.auth.devLogin ? '有効' : '無効'}`);
   console.log(`   (Host検証: loopbackのみ / CORS: ダッシュボードのみ)\n`);
 });

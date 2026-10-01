@@ -25,6 +25,8 @@ export type Permission =
   | 'session:instruct'
   | 'session:approve'
   | 'session:view'
+  | 'session:delete'
+  | 'workspace:create'
   | 'audit:view';
 
 /** 監査ログの1件（誰が・いつ・何を・結果） */

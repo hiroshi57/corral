@@ -2,7 +2,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
 
-const SECRET = config.token; // デーモン起動ごとのシークレット（トークンと共用）
+// セッション署名鍵。API トークンとは分離する（トークンはブラウザへ配布されるため）
+const SECRET = config.sessionSecret;
 
 function b64url(buf: Buffer | string): string {
   return Buffer.from(buf).toString('base64url');
